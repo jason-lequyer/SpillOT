@@ -12,7 +12,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
   - Outputs
   - Command-Line Use
 - Denoiser
-  - Multi-channel dat
+  - Multi-channel data
   - 2D data
   - Reproducibility
 - Troubleshooting
@@ -243,7 +243,7 @@ python N2FDOM.py Microscope_gaussianpoisson
   - python=3.11, numpy, scipy, tifffile
   - imagecodecs is optional but recommended for wider TIFF codec support
 
-- Does the fiji plugin use a GPU
+- Does the Fiji plugin use a GPU
   - No. The debleeder is CPU-based. However the separate denoiser scripts will require a GPU.
 
 ---
