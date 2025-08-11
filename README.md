@@ -22,16 +22,6 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 # Fiji Plugin
 
-The Fiji plugin runs the debleeder through a Conda environment named rfot. The plugin folder is named RefineOT and contains two files:
-
-```
-RefineOT/
-  Debleed_Run.py
-  Debleed.py
-```
-
-In this repository, these two files live at `imagej/debleed/Debleed_Run.py` and `imagej/debleed/Debleed.py`. During installation you will copy them into Fiji and place them in a folder named `RefineOT`.
-
 ## Quick Start
 
 1) Install Fiji and anaconda if needed
