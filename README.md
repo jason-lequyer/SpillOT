@@ -50,12 +50,12 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 2) Run the plugin from the menu if visible:
    - Plugins -> RefineOT -> Debleed
    - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
-3) Now the Bleed-through groups dialog opens:
+3) Now it will ask you to group co-expressing channels together:
    - This menu allows you to group co-expressing channels so they do not debleed each other. Use the matrix to exclude channels that share real signal, not bleed-through. More prior knowledge yields better results. 
 
    - The plugin proposes an initial auto-grouping using channel names and a built-in lookup table of known co-expressing channels in IMC. Review and adjust as needed. If it misses obvious pairs on correctly named channels, tell us which ones and we will update the lookup table.
 
-5) The Run Debleed dialog opens:
+5) Finally, it will ask you to enter some parameters:
    - Channel(s) to debleed: examples include `1` or `1,3-5`.
    - Patch size: even integer greater than or equal to 4. Lower is more aggressive and faster. Default is 16.
    - Conda env path: the plugin tries to prefill the path to the rfot environment. If it is blank, paste the full path to your env. Examples are in the FAQ below.
