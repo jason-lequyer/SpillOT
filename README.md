@@ -38,7 +38,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 3) Install the plugin into Fiji
    - Download this repository by clicking Code -> Download ZIP in the top right corner and unzip it on your computer
-   - Copy `imagej/debleed/Debleed_Run.py` and `imagej/debleed/Debleed.py` into a folder named `RefineOT` under your Fiji plugins folder, for example:
+   - Copy `plugins/RefineOT` into your Fiji plugins folder, for example you should end up with:
      - macOS: `Fiji.app/plugins/RefineOT/`
      - Windows: `Fiji.app\\plugins\\RefineOT\\`
      - Linux: `Fiji.app/plugins/RefineOT/`
