@@ -1,6 +1,6 @@
 # RefineOT
 
-Highly multiplexed imaging techniques are vital tools in biomedical research, used to study complex tissue structures and cellular interactions in both normal and disease states. Despite their capabilities, these techniques often suffer from significant noise and bleed-through. RefineOT is a plug-and-play, blind, zero-shot denoising and bleed-through correction toolkit. It learns directly from the input image with no training data, no spillover matrices, and no fragile hyperparameters. It has shown strong performance on IMC and t-CyCIF datasets.
+Highly multiplexed imaging techniques are vital tools in biomedical research, used to study complex tissue structures and cellular interactions in both normal and disease states. Despite their capabilities, these techniques often suffer from significant noise and bleed-through. RefineOT is a plug-and-play, blind, zero-shot denoising and bleed-through correction toolkit. It learns directly from the input image with no training data, no spillover matrices, and no sensitive hyperparameters. It has shown strong performance on IMC and t-CyCIF datasets.
 
 ![RefineOT](https://github.com/jason-lequyer/RefineOT/blob/main/gitfig.png)
 
