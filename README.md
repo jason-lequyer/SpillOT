@@ -86,7 +86,6 @@ Click OK to start. A progress window shows elapsed time while each channel is pr
 - All channels mode produces `..._debleed.tif`.
 - The datatype matches your input. Outputs are ImageJ compatible TIFFs.
 
----
 
 ## Command-Line Use
 
