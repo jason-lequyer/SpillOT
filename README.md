@@ -51,7 +51,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
    - Plugins -> RefineOT -> Debleed
    - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
 3) Now it will ask you to group co-expressing channels together:
-   - This menu allows you to group co-expressing channels so they do not debleed each other. Use the matrix to exclude channels that share real signal, not bleed-through. More prior knowledge yields better results. 
+   - This menu allows you to group co-expressing channels so they do not debleed each other. Use the matrix to exclude channels that share real signal, not bleed-through.
 
    - The plugin proposes an initial auto-grouping using channel names and a built-in lookup table of known co-expressing channels in IMC. Review and adjust as needed. If it misses obvious pairs on correctly named channels, tell us which ones and we will update the lookup table.
 
