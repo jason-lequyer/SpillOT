@@ -1,41 +1,109 @@
 # RefineOT
 
-Highly multiplexed imaging techniques are vital tools in biomedical research, used to study complex tissue structures and cellular interactions in both normal and disease states. Despite their capabilities, these techniques often suffer from significant noise, the random fluctuation of pixel intensity, and bleed-through, where signals from different channels interfere with each other. Here we present RefineOT, a novel blind zero-shot denoising and bleed-through correction software package that is completely plug-and-play. RefineOT operates unsupervised, learning solely from the input image without the need for training datasets, sensitive hyperparameters, or predefined spillover matrices.  RefineOT markedly improv the reliability and precision of downstream analyses on Image Mass Cytometry (IMC) and Tissue Cyclic Immunofluorescence (t-CyCIF) datasets.
+Highly multiplexed imaging techniques are vital tools in biomedical research, used to study complex tissue structures and cellular interactions in both normal and disease states. Despite their capabilities, these techniques often suffer from significant noise and bleed-through. RefineOT is a plug-and-play, blind, zero-shot denoising and bleed-through correction toolkit. It learns directly from the input image with no training data, no spillover matrices, and no fragile hyperparameters. It has shown strong performance on IMC and t-CyCIF datasets.
 
-![alt text](https://github.com/jason-lequyer/RefineOT/blob/main/gitfig.png)
+![RefineOT](https://github.com/jason-lequyer/RefineOT/blob/main/gitfig.png)
 
-# Installation
-First download our code by clicking Code -> Download ZIP in the top right corner and unzip it on your computer.
+## Contents
 
-If you don't already have anaconda, install it by following instructions at this link: https://docs.anaconda.com/anaconda/install/.
+- Fiji or ImageJ Plugin
+  - Quick Start
+  - How to Run in Fiji
+  - Groups UI and CSV Mask
+  - Patch Size Tips
+  - Outputs
+- Command-Line Use
+  - IMC and Multiplexed Stacks
+  - Denoiser CLI
+- Troubleshooting
+- FAQ
+- Minimal Install Commands
 
-It would also be helpful to have ImageJ installed: https://imagej.nih.gov/ij/download.html.
+---
 
-Open Anaconda Prompt (or terminal if on Mac/Linux) and enter the following commands to create a new conda environment and install the required packages:
+## Fiji or ImageJ Plugin
 
-```python
-conda create --name RFOT
-conda activate RFOT
+The Fiji plugin runs the debleeder through a Conda environment named rfot. The plugin folder is named RefineOT and contains two files:
+
+```
+RefineOT/
+  Debleed_Run.py
+  Debleed.py
 ```
 
-Now follow the instructions here to get a command you can enter to install pytorch: https://pytorch.org/get-started/locally/. If you have a GPU, select one of the compute platforms that starts with 'CUDA'. The command the website spits out should start with 'pip3'. Enter that command into the terminal and press enter, then once it's installed proceed as follows to install some additonal needed libraries:
+In this repository, these two files live at `imagej/debleed/Debleed_Run.py` and `imagej/debleed/Debleed.py`. During installation you will copy them into Fiji and place them in a folder named `RefineOT`.
 
-```python
-conda install conda-forge::tifffile
-conda install anaconda::pandas
-conda install anaconda::scipy
-```
+### Quick Start
 
-This code has been tested on pytorch=2.4.0, tifffile=2023.2.28, pandas=2.2.2 and scipy=1.13.1. Installation should take about 20 minutes.
+1) Install Fiji and anaconda if needed
+   - Download Fiji from https://fiji.sc/ and install it.
+   - If you don't already have anaconda, install it by following instructions at this link: https://docs.anaconda.com/anaconda/install/.
 
-# Using debleeder on IMC and other highly multiplexed data
-(Note: The program expects tiff stacks for input IMC data. If your data is saved as a sequence of individual channel files, open ImageJ and go File->Import->Image Sequence, select the folder containing the individual channels and click Open. Once open go Image->Stacks->Images to Stack and then save the resulting image stack, this file should work with RefineOT.)
+2) Create the Conda environment named rfot
+   - Run the following in a terminal or Anaconda Prompt:
+     ```bash
+     conda create -n rfot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
+     conda activate rfot
+     python -c "import numpy,scipy,tifffile; print('RFOT env OK')"
+     ```
 
-To run the debleeder create a folder in the master directory (the directory that contains debleed.py) and put your raw IMC images into it. Then open anaconda prompt/terminal and run the following:
+3) Install the plugin into Fiji
+   - Download this repository by clicking Code -> Download ZIP in the top right corner and unzip it on your computer
+   - Copy `imagej/debleed/Debleed_Run.py` and `imagej/debleed/Debleed.py` into a folder named `RefineOT` under your Fiji plugins folder, for example:
+     - macOS: `Fiji.app/plugins/RefineOT/`
+     - Windows: `Fiji.app\\plugins\\RefineOT\\`
+     - Linux: `Fiji.app/plugins/RefineOT/`
+   - Restart Fiji or use Help -> Refresh Menus.
+
+### How to Run in Fiji
+
+1) Open your image in Fiji. TIFF stacks are recommended. RGB images are supported and will be split into 3 channels automatically.
+2) Run the plugin from the menu if visible:
+   - Plugins -> RefineOT -> Debleed
+   - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
+3) The Bleed-through groups dialog opens:
+   - For best results on IMC, you should group co-expressing channels so they are not considered when debleeding one another, or genrally when it is known certain channels contain legitimately   similar signal that is not the result of bleed through. Ultimately you should put as much information as is known into this matrix to achieve optimal image restoration. 
+
+     - Channels are auto-grouped at the start using string detection on channel names, togetehr with a lookup table of co-expressing channels we have added to the code. You can then correct this auto  grouping to your specifications. If this auto grouping process fails on your properly named channels and you think it shouldn't, let us know which channels it should be groupoing together and we can use your data to improve our lookup table.
+
+5) The Run Debleed dialog opens:
+   - Channel(s) to debleed: examples include `1` or `1,3-5`.
+   - Patch size: even integer greater than or equal to 4. Lower is more aggressive and faster. Default is 16.
+   - Conda env path: the plugin tries to prefill the path to the rfot environment. If it is blank, paste the full path to your env. Examples are in the FAQ below.
+
+Click OK to start. A progress window shows elapsed time while each channel is processed.
+
+### Groups UI and CSV Mask
+
+- After confirming groups, the plugin writes a CSV mask next to your image with the same basename.
+- The CSV encodes which channels can contribute to each target channel during debleeding. Use 1 to include and 0 to veto.
+- On later runs the debleeder auto-detects this CSV if it is present.
+- Rows and columns correspond to channel order in the stack. Header text is ignored.
+
+### Patch Size Tips
+
+- Must be an even integer greater than or equal to 4.
+- Lower values such as 12 to 16 are stronger and faster.
+- Higher values such as 20 to 24 are gentler and slower.
+- Very small images are clamped automatically so the sliding window fits.
+
+### Outputs
+
+- Single channel mode produces `..._Channel_<N>_debleed.tif`.
+- All channels mode produces `..._debleed.tif`.
+- The datatype matches your input. Outputs are ImageJ compatible TIFFs.
+
+---
+
+## Command-Line Use
+
+You can run the debleeder outside Fiji in the rfot environment. The debleeder expects a TIFF stack. If you have individual files per channel, use Fiji: File -> Import -> Image Sequence, then Image -> Stacks -> Images to Stack, then save as TIFF.
+
+To run the debleeder in terminal create a folder in the master directory (the directory that contains debleed.py) and put your raw IMC images into it. Then open anaconda prompt/terminal and run the following:
 
 ```python
 cd <masterdirectoryname>
-conda activate RFOT
+conda activate rfot
 python debleed.py <imcfolder>/<imcfilename> <channel_to_debleed>
 ```
 
@@ -47,32 +115,43 @@ conda activate RFOT
 python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
+
 For best results on IMC, you should supply a veto matrix of channels you do not want to be considered when debleeding the target channel. For format, see IMC_smallcrop_withcsv/IMC_smallcrop.csv. Essentially the columns and rows list each channel, and a 0 in (x,y) indicates that column x's channel will NOT be considered when debleeding the row y's channel. 
 
 This might be done, for example if it is a prioi known which channels are suceptible to bleed through into other channels, or if it is known certain channels contain legitimately similar signal that is not the result of bleed through. Ultimately you should put as much information as is known into this matrix to achieve optimal image restoration. 
 
 The names of columns and rows in the .csv file is irrelevant and not read by the program, it will assume the fouth row corresponds to the fourth channel etc., so if you do name the columns and rows ensure they correspond to the order in which they appear in the tiff stack. The program automatically detects the presence of a veto matrix (just give it the same name as the target tiff file, but ending in .csv), so you can simply run:
 
-```python
-cd <masterdirectoryname>
-conda activate RFOT
-python debleed.py IMC_smallcrop_withcsv/IMC_smallcrop.tif 21
+
+```bash
+conda activate rfot
+python Debleed.py <path/to/stack.tif> [channel]
+python Debleed.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
-The denoiser and debleeder/denoiser combo can be run in the exact same way:
+You can also specifiy patch size using the -p argument, e.g to use patch size 12:
+```bash
+conda activate rfot
+python Debleed.py <path/to/stack.tif> [channel]
+python Debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 -p 12
+```
+### Denoiser CLI
+
+The denoiser is not part of the Fiji plugin, but you can run it from the command line. We first need to install pytorch to our env though. Follow the instructions here to get a command you can enter to install pytorch: https://pytorch.org/get-started/locally/. If you have a GPU, select one of the compute platforms that starts with 'CUDA'. The command the website spits out should start with 'pip3'. Enter that command into the terminal and press enter.
+
+The denoiser can be run in the exact same way as the terminal version of the debleeder:
 
 ```python
 cd <masterdirectoryname>
 conda activate RFOT
-python debleed_and_denoise.py IMC_smallcrop_withcsv/IMC_smallcrop.tif 21
 python denoise.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
 This should take under 30 minutes to run on a GPU with >32GB of memory.
 
-# Using RefineOT on your 2D grayscale data
+# 2D Data
 
-Create a folder in the master directory (the directory that contains debleed.py) and put your noisy images into it. Then open anaconda prompt/terminal and run the following:
+To denoise 2D images, create a folder in the master directory (the directory that contains debleed.py) and put your noisy images into it. Then open anaconda prompt/terminal and run the following:
 
 ```python
 cd <masterdirectoryname>
@@ -118,7 +197,7 @@ Which returns the denoised results in a folder named 'Set12_gaussian25_denoised'
 To find the PSNR and SSIM between a folder containing denoised results and the corresponding folder containing known ground truths (e.g. Set12_gaussian25_denoised and Set12 if you followed above), we need to install one more conda package:
 
 ```python
-conda activate RFOT
+conda activate rfot
 conda install -c anaconda scikit-image=0.19.2
 ```
 
@@ -139,9 +218,56 @@ The '255' at the end denotes the dynamic range of the image, in the case of the 
 We can run DIP, Noise2Self, P2S and N2F+DOM in the RFOT environment:
 
 ```python
-conda activate RFOT
+conda activate rfot
 python DIP.py Microscope_gaussianpoisson
 python N2S.py Microscope_gaussianpoisson
 python P2S.py Microscope_gaussianpoisson
 python N2FDOM.py Microscope_gaussianpoisson
 ```
+
+
+---
+
+## Troubleshooting
+
+- The plugin cannot find rfot automatically on macOS
+  - Run `conda env list` to see the path, for example `/opt/anaconda3/envs/rfot`. Paste that full path into the dialog.
+  - The plugin also tries `~/miniforge3/envs/rfot`, `~/mambaforge/envs/rfot`, and other common locations. If none are found, manual entry works.
+
+- Windows MKL error such as mkl_intel_thread.2.dll not found
+  - Recommended: switch NumPy or SciPy to OpenBLAS builds:
+    ```bat
+    conda activate rfot
+    conda install -y -c conda-forge "blas=*=openblas" numpy scipy
+    ```
+  - Keep MKL: install the MKL runtime and ensure DLL search works:
+    ```bat
+    conda activate rfot
+    conda install -y -c defaults mkl intel-openmp mkl-service
+    set CONDA_DLL_SEARCH_MODIFICATION_ENABLE=1
+    ```
+  - The plugin adds `<env>\\Library\\bin` to PATH for the child process on Windows.
+
+
+---
+
+## FAQ
+
+- Where is my env installed
+  - Run `conda env list`. Use the full path shown for rfot.
+  - Examples
+    - macOS: `/opt/anaconda3/envs/rfot` or `~/miniforge3/envs/rfot`
+    - Windows: `C:\\Users\\<you>\\miniconda3\\envs\\rfot` or `C:\\Users\\<you>\\anaconda3\\envs\\rfot`
+    - Linux: `~/mambaforge/envs/rfot` or `~/miniconda3/envs/rfot`
+
+- Can I use Mambaforge or Miniforge
+  - Yes. The plugin only needs the env root path and the env must contain python, numpy, scipy, and tifffile.
+
+- Which packages are required for the Fiji debleeder
+  - python=3.11, numpy, scipy, tifffile
+  - imagecodecs is optional but recommended for wider TIFF codec support
+
+- Does the fiji plugin use a GPU
+  - No. The debleeder is CPU-based. However the separate denoiser scripts will require a GPU.
+
+---
