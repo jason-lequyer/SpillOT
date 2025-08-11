@@ -20,7 +20,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 ---
 
-## Fiji Plugin
+# Fiji Plugin
 
 The Fiji plugin runs the debleeder through a Conda environment named rfot. The plugin folder is named RefineOT and contains two files:
 
@@ -32,7 +32,7 @@ RefineOT/
 
 In this repository, these two files live at `imagej/debleed/Debleed_Run.py` and `imagej/debleed/Debleed.py`. During installation you will copy them into Fiji and place them in a folder named `RefineOT`.
 
-### Quick Start
+## Quick Start
 
 1) Install Fiji and anaconda if needed
    - Download Fiji from https://fiji.sc/ and install it.
@@ -54,7 +54,7 @@ In this repository, these two files live at `imagej/debleed/Debleed_Run.py` and 
      - Linux: `Fiji.app/plugins/RefineOT/`
    - Restart Fiji or use Help -> Refresh Menus.
 
-### How to Run in Fiji
+## How to Run in Fiji
 
 1) Open your image in Fiji. TIFF stacks are recommended. RGB images are supported and will be split into 3 channels automatically.
 2) Run the plugin from the menu if visible:
@@ -72,21 +72,15 @@ In this repository, these two files live at `imagej/debleed/Debleed_Run.py` and 
 
 Click OK to start. A progress window shows elapsed time while each channel is processed.
 
-### Groups UI and CSV Mask
+## Groups UI and CSV Mask
 
 - After confirming groups, the plugin writes a CSV mask next to your image with the same basename.
 - The CSV encodes which channels can contribute to each target channel during debleeding. Use 1 to include and 0 to veto.
 - On later runs the debleeder auto-detects this CSV if it is present.
 - Rows and columns correspond to channel order in the stack. Header text is ignored.
 
-### Patch Size Tips
 
-- Must be an even integer greater than or equal to 4.
-- Lower values such as 12 to 16 are stronger and faster.
-- Higher values such as 20 to 24 are gentler and slower.
-- Very small images are clamped automatically so the sliding window fits.
-
-### Outputs
+## Outputs
 
 - Single channel mode produces `..._Channel_<N>_debleed.tif`.
 - All channels mode produces `..._debleed.tif`.
@@ -134,7 +128,7 @@ conda activate rfot
 python Debleed.py <path/to/stack.tif> [channel]
 python Debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 -p 12
 ```
-### Denoiser CLI
+# Denoiser
 
 The denoiser is not part of the Fiji plugin, but you can run it from the command line. We first need to install pytorch to our env though. Follow the instructions here to get a command you can enter to install pytorch: https://pytorch.org/get-started/locally/. If you have a GPU, select one of the compute platforms that starts with 'CUDA'. The command the website spits out should start with 'pip3'. Enter that command into the terminal and press enter.
 
@@ -148,7 +142,7 @@ python denoise.py IMC_smallcrop/IMC_smallcrop.tif 21
 
 This should take under 30 minutes to run on a GPU with >32GB of memory.
 
-# 2D Data
+## 2D Data
 
 To denoise 2D images, create a folder in the master directory (the directory that contains debleed.py) and put your noisy images into it. Then open anaconda prompt/terminal and run the following:
 
@@ -167,7 +161,7 @@ To run anything beyond this point in the readme, we need to install another cond
 conda install anaconda::scikit-image=0.23.2
 ```
 
-# Using RefineOT on provided datasets
+## Using RefineOT on provided datasets
 
 To run RefineOT denoise on one of the noisy microscope images, open a terminal in the master directory and run:
 
@@ -191,7 +185,7 @@ Which returns the denoised results in a folder named 'Set12_gaussian25_denoised'
   
 
 
-# Calculate accuracy of RefineOT Denoise
+## Calculate accuracy of RefineOT Denoise
 
 To find the PSNR and SSIM between a folder containing denoised results and the corresponding folder containing known ground truths (e.g. Set12_gaussian25_denoised and Set12 if you followed above), we need to install one more conda package:
 
@@ -212,7 +206,7 @@ The '255' at the end denotes the dynamic range of the image, in the case of the 
   
 
   
-# Running compared methods
+## Running compared methods
 
 We can run DIP, Noise2Self, P2S and N2F+DOM in the RFOT environment:
 
@@ -227,7 +221,7 @@ python N2FDOM.py Microscope_gaussianpoisson
 
 ---
 
-## Troubleshooting
+# Troubleshooting
 
 - The plugin cannot find rfot automatically on macOS
   - Run `conda env list` to see the path, for example `/opt/anaconda3/envs/rfot`. Paste that full path into the dialog.
@@ -250,7 +244,7 @@ python N2FDOM.py Microscope_gaussianpoisson
 
 ---
 
-## FAQ
+# FAQ
 
 - Where is my env installed
   - Run `conda env list`. Use the full path shown for rfot.
