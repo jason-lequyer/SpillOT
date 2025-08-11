@@ -28,7 +28,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
    - Download Fiji from https://fiji.sc/ and install it.
    - If you don't already have anaconda, install it by following instructions at this link: https://docs.anaconda.com/anaconda/install/.
 
-2) Create the Conda environment named rfot
+2) Create a conda environment named rfot
    - Run the following in a terminal or Anaconda Prompt:
      ```bash
      conda create -n rfot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
@@ -50,10 +50,10 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 2) Run the plugin from the menu if visible:
    - Plugins -> RefineOT -> Debleed
    - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
-3) The Bleed-through groups dialog opens:
-   - For best results on IMC, you should group co-expressing channels so they are not considered when debleeding one another, or genrally when it is known certain channels contain legitimately   similar signal that is not the result of bleed through. Ultimately you should put as much information as is known into this matrix to achieve optimal image restoration. 
+3) Now the Bleed-through groups dialog opens:
+   - This menu allows you to group co-expressing channels so they do not debleed each other. Use the matrix to exclude channels that share real signal, not bleed-through. More prior knowledge yields better results. 
 
-     - Channels are auto-grouped at the start using string detection on channel names, togetehr with a lookup table of co-expressing channels we have added to the code. You can then correct this auto  grouping to your specifications. If this auto grouping process fails on your properly named channels and you think it shouldn't, let us know which channels it should be groupoing together and we can use your data to improve our lookup table.
+   - The plugin proposes an initial auto-grouping using channel names and a built-in lookup table of known co-expressing channels in IMC. Review and adjust as needed. If it misses obvious pairs on correctly named channels, tell us which ones and we will update the lookup table.
 
 5) The Run Debleed dialog opens:
    - Channel(s) to debleed: examples include `1` or `1,3-5`.
