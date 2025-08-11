@@ -9,12 +9,12 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 - Fiji Plugin
   - Quick Start
   - How to Run in Fiji
-  - Groups UI and CSV Mask
-  - Patch Size Tips
   - Outputs
-- Command-Line Use
-  - IMC and Multiplexed Stacks
-  - Denoiser CLI
+  - Command-Line Use
+- Denoiser
+  - Multi-channel dat
+  - 2D data
+  - Reproducibility
 - Troubleshooting
 - FAQ
 
@@ -72,13 +72,6 @@ In this repository, these two files live at `imagej/debleed/Debleed_Run.py` and 
 
 Click OK to start. A progress window shows elapsed time while each channel is processed.
 
-## Groups UI and CSV Mask
-
-- After confirming groups, the plugin writes a CSV mask next to your image with the same basename.
-- The CSV encodes which channels can contribute to each target channel during debleeding. Use 1 to include and 0 to veto.
-- On later runs the debleeder auto-detects this CSV if it is present.
-- Rows and columns correspond to channel order in the stack. Header text is ignored.
-
 
 ## Outputs
 
@@ -129,6 +122,7 @@ python Debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 -p 12
 ```
 # Denoiser
 
+## Multi-channel data
 The denoiser is not part of the Fiji plugin, but you can run it from the command line. We first need to install pytorch to our env though. Follow the instructions here to get a command you can enter to install pytorch: https://pytorch.org/get-started/locally/. If you have a GPU, select one of the compute platforms that starts with 'CUDA'. The command the website spits out should start with 'pip3'. Enter that command into the terminal and press enter.
 
 The denoiser can be run in the exact same way as the terminal version of the debleeder:
@@ -152,7 +146,7 @@ python RFOT.py <noisyfolder>/<noisyimagename>
 ```
 Replacing "masterdirectoryname" with the full path to the directory that contains denoise2D.py, replacing "noisyfolder" with the name of the folder containing images you want denoised and replacing "noisyimagename" with the name of the image file you want denoised. Results will be saved to the directory '<noisyolder>_denoised'. Issues may arise if using an image format that is not supported by the tifffile python package, to fix these issues you can open your images in ImageJ and re-save them as .tif (even if they were already .tif, this will convert them to ImageJ .tif).
 
-# Reproducibility
+## Reproducibility
 
 To run anything beyond this point in the readme, we need to install another conda library:
 
@@ -160,7 +154,7 @@ To run anything beyond this point in the readme, we need to install another cond
 conda install anaconda::scikit-image=0.23.2
 ```
 
-## Using RefineOT on provided datasets
+### Using RefineOT on provided datasets
 
 To run RefineOT denoise on one of the noisy microscope images, open a terminal in the master directory and run:
 
@@ -184,7 +178,7 @@ Which returns the denoised results in a folder named 'Set12_gaussian25_denoised'
   
 
 
-## Calculate accuracy of RefineOT Denoise
+### Calculate accuracy of RefineOT Denoise
 
 To find the PSNR and SSIM between a folder containing denoised results and the corresponding folder containing known ground truths (e.g. Set12_gaussian25_denoised and Set12 if you followed above), we need to install one more conda package:
 
@@ -205,7 +199,7 @@ The '255' at the end denotes the dynamic range of the image, in the case of the 
   
 
   
-## Running compared methods
+### Running compared methods
 
 We can run DIP, Noise2Self, P2S and N2F+DOM in the RFOT environment:
 
