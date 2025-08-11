@@ -6,7 +6,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 ## Contents
 
-- Fiji or ImageJ Plugin
+- Fiji Plugin
   - Quick Start
   - How to Run in Fiji
   - Groups UI and CSV Mask
@@ -17,11 +17,10 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
   - Denoiser CLI
 - Troubleshooting
 - FAQ
-- Minimal Install Commands
 
 ---
 
-## Fiji or ImageJ Plugin
+## Fiji Plugin
 
 The Fiji plugin runs the debleeder through a Conda environment named rfot. The plugin folder is named RefineOT and contains two files:
 
