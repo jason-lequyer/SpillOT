@@ -56,8 +56,8 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
    - The plugin proposes an initial auto-grouping using channel names and a built-in lookup table of known co-expressing channels in IMC. Review and adjust as needed. If it misses obvious pairs on correctly named channels, tell us which ones and we will update the lookup table.
 
 5) Finally, it will ask you to enter some parameters:
-   - Channel(s) to debleed: examples include `1` or `1,3-5`.
-   - Patch size: even integer greater than or equal to 4. Lower is more aggressive and faster. Default is 16.
+   - Channel(s) to debleed, e.g. `1,3-5`.
+   - Patch size, must be an even integer greater than or equal to 4. Smaller patch size leads to more aggressive and faster debleeding. Default is 16.
    - Conda env path: the plugin tries to prefill the path to the rfot environment. If it is blank, paste the full path to your env. Examples are in the FAQ below.
 
 Click OK to start. A progress window shows elapsed time while each channel is processed.
