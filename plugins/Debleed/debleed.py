@@ -7,14 +7,12 @@
 # 600 University Avenue, Room 1070, Toronto, ON M5G 1X5, Canada
 #
 
-
-import os, sys, time
+import os, sys, time, platform
 import numpy as np
 from tifffile import imread, imwrite
 from scipy.optimize import linear_sum_assignment
 import concurrent.futures as cf
 import multiprocessing as mp
-import platform
 
 from multiprocessing import shared_memory
 # ---------- top of file (after imports) ----------
@@ -22,10 +20,9 @@ _SHM_HANDLES = []          # global registry to keep blocks alive
 # -------------------------------------------------
 
 def _to_shm(ndarray):
-
     shm = shared_memory.SharedMemory(create=True, size=ndarray.nbytes)
     view = np.ndarray(ndarray.shape, dtype=ndarray.dtype, buffer=shm.buf)
-    view[:] = ndarray[:]          
+    view[:] = ndarray[:]
     return shm, view
 
 def _init_solve_pool_shm(name_base, shape_base, dtype_base,
@@ -55,12 +52,8 @@ def _init_solve_pool_shm(name_base, shape_base, dtype_base,
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"
 
-
-
-
 # -------- portable helpers (picklable) --------
 def RP_pad2(x, pad=(2, 2, 2, 2)):
-
     return _reflection_pad2d(x, pad)
 
 def unfold_p16(x):
@@ -96,22 +89,16 @@ def _init_compare_pool(_compare3d, _rf, _rfdom, _rfdommean,
     patsize = np.int32(_pat)
     RP, unfold = RP_pad2, unfold_p16
 
-
-
-
 # ───────────────────────────── helper functions ────────────────────────────────
-def _solve_chunk(hj_vec: np.ndarray) -> list[tuple[int, np.ndarray]]:
+def _solve_chunk(hj_vec: np.ndarray):
     out = []
     for hj in hj_vec:
         out.append(_solve_one_plane(int(hj)))
     return out
 
-
 def _chunks(n_planes, grainsize=512):
     for start in range(0, n_planes, grainsize):
         yield np.arange(start, min(start + grainsize, n_planes), dtype=np.int64)
-
-
 
 def _clone(a):                 # torch.clone
     return a.copy()
@@ -195,7 +182,6 @@ def _inflate_cost(curcost4d, mask_a2d, mask_b2d, big):
     if n:
         flat[rows[:n], cols[:n]] = big
 
-
 # ░░░░░░░░░░░░░░░░░░░ constants ░░░░░░░░░░░░░░░░░░
 FLOAT32_MAX      = np.float32(np.finfo(np.float32).max)
 FLOAT32_MAX_SQRT = np.sqrt(FLOAT32_MAX)
@@ -213,7 +199,6 @@ def _set_patsize(p):
 varkern = np.array([[0, 1, 0],
                     [1, -4, 1],
                     [0, 1, 0]], dtype=np.float32)
-
 
 def _process_compare_channel(ow: int) -> np.ndarray:
     curcomp = RP(compare3d[:, ow:ow+1, :, :])
@@ -252,8 +237,7 @@ def _process_compare_channel(ow: int) -> np.ndarray:
                        (trumeanbase[0, 0, :] < trumeancomp[0, 0, :]))[0]
     return whurdif
 
-
-def _solve_one_plane(hj: int) -> tuple[int, np.ndarray]:
+def _solve_one_plane(hj: int):
     curpat = _clone(base2d[0, :, :, hj])
     curpat = _repeat(curpat, patsize+4, patsize+4, 1, 1)
 
@@ -339,22 +323,48 @@ def _safe_imwrite(path, array, **kwargs):
     try:
         imwrite(path, array, **kwargs)
     except ValueError as e:
-        print(f"imwrite failed ({e}). Retrying as float32 ...")
+        print("imwrite failed ({}). Retrying as float32 ...".format(e))
         imwrite(path, array.astype(np.float32), **kwargs)
 
+# ---------- NEW: overexposed handling ----------
+def _zero_overexposed_for_run(base2d_f32, compare3d_f32, raw_u, check_idxs, verbose=False):
+    """
+    base2d_f32:  (1,H,W) float32 view (not unsqueezed yet in batch dim)
+    compare3d_f32: (C,H,W) float32 working copy
+    raw_u: original raw array (C,H,W), integer or float
+    check_idxs: 1D array of channel indices to consider for saturation union
+    """
+    dt = raw_u.dtype
+    maxv = None
+    if np.issubdtype(dt, np.integer):
+        maxv = np.iinfo(dt).max
+    elif np.issubdtype(dt, np.floating):
+        # No well-defined saturation for float images; skip silently.
+        return
+    else:
+        return
 
+    check_idxs = np.unique(np.asarray(check_idxs, dtype=np.int64))
+    if check_idxs.size == 0:
+        return
 
+    sat_any = (raw_u[check_idxs] == maxv).any(axis=0)  # (H,W) bool
+    if sat_any.any():
+        n_pix = int(sat_any.sum())
+        if verbose:
+            print("ignore_overexposed: zeroing {} saturated pixels (dtype max = {}).".format(n_pix, maxv))
+        base2d_f32[0][sat_any] = 0.0
+        # zero across all comparison channels we will use for this run
+        compare3d_f32[:] = np.where(sat_any[None, :, :], 0.0, compare3d_f32)
 
 # ─────────────────────────────────── main ───────────────────────────────────────
 if __name__ == "__main__":
-    
     import argparse
 
     mp.freeze_support()
-    
     if mp.get_start_method(allow_none=True) is None:
         mp.set_start_method("spawn" if platform.system() == "Windows" else "fork", force=True)
-    
+
     parser = argparse.ArgumentParser(
         prog=os.path.basename(sys.argv[0]),
         description="Debleed TIFF stack; optionally one channel."
@@ -364,33 +374,27 @@ if __name__ == "__main__":
                         help="1-based channel to debleed (omit for all channels)")
     parser.add_argument("-p", "--patsize", type=int, default=DEFAULT_PATSIZE,
                         help="Patch size (default: 16)")
-    
+    parser.add_argument("--ignore_overexposed", action="store_true",
+                        help="If set, pixels saturated at dtype max in the base or any compared channels are zeroed before processing (per run).")
     args = parser.parse_args()
+
     file_name = args.image
     single_chan = (args.channel - 1) if args.channel is not None else None
     _set_patsize(args.patsize)
-    
-        
-    mp.freeze_support()                           # required for Windows + PyInstaller
+    ignore_overexposed = bool(args.ignore_overexposed)
 
-
-    if mp.get_start_method(allow_none=True) is None:
-        mp.set_start_method(
-            "spawn" if platform.system() == "Windows" else "fork",
-            force=True
-        )
-
+    # Legacy argv parsing kept (as in prior versions) to avoid behavior changes
+    # for callers that relied on positional parsing only.
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <image.tif> [channel]")
+        print("Usage: {} <image.tif> [channel]".format(sys.argv[0]))
         sys.exit(1)
-
     file_name = sys.argv[1]
-    single_chan = int(sys.argv[2]) - 1 if len(sys.argv) > 2 else None
+    single_chan = int(sys.argv[2]) - 1 if len(sys.argv) > 2 and sys.argv[2].isdigit() else single_chan
 
     # read input once
     raw = imread(file_name)
     swapped_rgb = False
-    if raw.shape[-1] == 3:                      
+    if raw.shape[-1] == 3:
         raw = np.swapaxes(raw, -2, -1)
         raw = np.swapaxes(raw, -3, -2)
         swapped_rgb = True
@@ -413,30 +417,44 @@ if __name__ == "__main__":
 
     # ───────────────────────── channel loop ──────────────────────────
     for oz in chan_iter:
-        print(f"\n Debleeding channel {oz+1}/{n_chan}")
+        print("\n Debleeding channel {}/{}".format(oz+1, n_chan))
         start_time = time.time()
 
+        # working copies (float32)
+        base2d_f32 = _clone(inpnorm[oz:oz+1, :, :])  # (1,H,W)
+        compare3d_f32 = _clone(inpnorm)              # (C,H,W)
 
-        inp = raw.reshape(-1, H, W)
-        ogshape = inp.shape                        # (Z,H,W)
-
-        base2d    = _clone(inpnorm[oz:oz+1, :, :])
-        compare3d = _clone(inpnorm)
-
-        base2d    = _unsqueeze(base2d, 0)
-        compare3d = _unsqueeze(compare3d, 0)
-        curcomp   = _clone(compare3d[:, oz:oz+1, :, :])
-
+        # inclusion set from CSV (if any)
+        included = None
         if mask_matrix is not None:
             row = mask_matrix[oz]
             included = np.where(np.isclose(row, 1, atol=1e-6))[0]
-            if included.size:
-                compare3d = compare3d[:, included, :, :]
-            else:
-                print("Mask row has no 1s using all channels.")
+            if included.size == 0:
+                print("Mask row has no 1s; using all channels.")
+                included = None
+
+        # union of channels to inspect for saturation for THIS run
+        if included is None:
+            check_idxs = np.arange(n_chan, dtype=np.int64)
+        else:
+            check_idxs = np.unique(np.concatenate([included, np.array([oz], dtype=np.int64)]))
+
+        # --- NEW: zero saturated pixels if requested (per-run) ---
+        if ignore_overexposed:
+            _zero_overexposed_for_run(base2d_f32, compare3d_f32, raw, check_idxs, verbose=True)
+
+        # shape to (B=1,C,H,W) for the downstream code
+        base2d    = _unsqueeze(base2d_f32, 0)   # (1,1,H,W)
+        compare3d = _unsqueeze(compare3d_f32, 0)  # (1,C,H,W)
+
+        # keep a copy of the current base channel for later steps
+        curcomp   = _clone(compare3d[:, oz:oz+1, :, :])
+
+        # if CSV mask included subset, apply it to compare3d after we took curcomp
+        if included is not None:
+            compare3d = compare3d[:, included, :, :]
 
         RP, unfold = RP_pad2, unfold_p16
-
         fold   = lambda x: _fold4d(x, (H, W), (patsize, patsize))
 
         dummy  = _ones_like(base2d)
@@ -529,11 +547,11 @@ if __name__ == "__main__":
 
         shm_base2d, base2d = _to_shm(base2d)     # view overwrites local base2d
         shm_rf,     rf     = _to_shm(rf)
-        
+
         idx_pack = (top_idx, bot_idx, lef_idx, rit_idx,
                     toplef_idx, toprit_idx, botlef_idx, botrit_idx,
                     bord_idx)
-        
+
         with cf.ProcessPoolExecutor(
                 max_workers=N_WORKERS,
                 initializer=_init_solve_pool_shm,
@@ -545,8 +563,6 @@ if __name__ == "__main__":
                                      _chunks(base2d.shape[-1], 2048)):  # bigger grain
                 for hj, newpat in res_list:
                     dom2d[0, 1:-1, 1:-1, hj] = newpat
-        # -----------------------------------------------
-
 
         base2d = base2d[:, 2:-2, 2:-2, :]
         dom2d  = dom2d[:, 2:-2, 2:-2, :]
@@ -595,6 +611,7 @@ if __name__ == "__main__":
         base2d *= 0
         dom2d  *= 0
 
+        # rebuild current base (curcomp) and run compare masking
         curcomp = RP(curcomp)
         curcomp = unfold(curcomp)
         curcomp = curcomp.reshape(-1, patsize+4, patsize+4, curcomp.shape[-1])
@@ -612,7 +629,8 @@ if __name__ == "__main__":
                                     range(compare3d.shape[1])):
                 if whurdif.size:
                     dom2d[:, :, whurdif] *= 0
-                    
+
+        # cleanup SHM
         shm_base2d.close(); shm_base2d.unlink()
         shm_rf.close();     shm_rf.unlink()
 
@@ -626,7 +644,7 @@ if __name__ == "__main__":
 
         # write result into outstack
         outstack[oz] = dom2d[0, 0]
-        print(f"    Done in {time.time() - start_time:.2f}s")
+        print("    Done in {:.2f}s".format(time.time() - start_time))
 
     # ───────────────────────────── save output ─────────────────────────────
     if swapped_rgb:
@@ -636,11 +654,10 @@ if __name__ == "__main__":
     if single_chan is None:
         out_name = os.path.splitext(file_name)[0] + "_debleed.tif"
         _safe_imwrite(out_name, outstack, imagej=True)
-        print(f"\nSaved full stack -> {out_name}")
+        print("\nSaved full stack -> {}".format(out_name))
     else:
-        out_name = os.path.splitext(file_name)[0] + f"_Channel_{single_chan+1}_debleed.tif"
-
+        out_name = os.path.splitext(file_name)[0] + "_Channel_{}_debleed.tif".format(single_chan+1)
         _safe_imwrite(out_name, outstack[single_chan], imagej=True)
-        print(f"\nSaved channel {single_chan+1} -> {out_name}")
+        print("\nSaved channel {} -> {}".format(single_chan+1, out_name))
 
-    print(f"=== Total runtime {time.time() - total_start:.1f}s ===")
+    print("=== Total runtime {:.1f}s ===".format(time.time() - total_start))
