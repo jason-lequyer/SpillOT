@@ -1,7 +1,9 @@
-#Copyright 2024, Jason Lequyer and Laurence Pelletier, All rights reserved.
-#Sinai Health SystemLunenfeld-Tanenbaum Research Institute
-#600 University Avenue, Room 1070
-#Toronto, ON, M5G 1X5, Canada
+# Copyright 2025, Jason Lequyer, Ferris Nowlan and Laurence Pelletier.
+# All rights reserved.
+# Sinai Health System - Lunenfeld Tanenbaum Research Institute
+# 600 University Avenue, Room 1070, Toronto, ON M5G 1X5, Canada
+#
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
