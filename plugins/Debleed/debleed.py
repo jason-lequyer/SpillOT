@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-#
 # Copyright 2024, Jason Lequyer and Laurence Pelletier.
 # All rights reserved.
 # Sinai Health System - Lunenfeld Tanenbaum Research Institute
@@ -11,6 +8,7 @@ import os, sys, time, platform
 import numpy as np
 from tifffile import imread, imwrite
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial import cKDTree
 import concurrent.futures as cf
 import multiprocessing as mp
 
@@ -316,46 +314,78 @@ def _solve_one_plane(hj: int):
     return hj, newpat.reshape(patsize+2, patsize+2)
 
 def _safe_imwrite(path, array, **kwargs):
-    """
-    Try writing in the array's dtype; if ImageJ/TIFF refuses,
-    fall back to float32.
-    """
     try:
         imwrite(path, array, **kwargs)
     except ValueError as e:
         print("imwrite failed ({}). Retrying as float32 ...".format(e))
         imwrite(path, array.astype(np.float32), **kwargs)
 
-# ---------- NEW: overexposed handling ----------
+# ---------- NEW: overexposed handling + inpaint ----------
 def _zero_overexposed_for_run(base2d_f32, compare3d_f32, raw_u, check_idxs, verbose=False):
     """
-    base2d_f32:  (1,H,W) float32 view (not unsqueezed yet in batch dim)
-    compare3d_f32: (C,H,W) float32 working copy
-    raw_u: original raw array (C,H,W), integer or float
-    check_idxs: 1D array of channel indices to consider for saturation union
+    Zero saturated pixels for this run and return the saturation mask (H,W) or None.
     """
     dt = raw_u.dtype
-    maxv = None
-    if np.issubdtype(dt, np.integer):
-        maxv = np.iinfo(dt).max
-    elif np.issubdtype(dt, np.floating):
-        # No well-defined saturation for float images; skip silently.
-        return
-    else:
-        return
+    if not (np.issubdtype(dt, np.integer)):
+        return None  # float images: no saturation concept, skip
 
+    maxv = np.iinfo(dt).max
     check_idxs = np.unique(np.asarray(check_idxs, dtype=np.int64))
     if check_idxs.size == 0:
-        return
+        return np.zeros(raw_u.shape[1:], dtype=bool)
 
     sat_any = (raw_u[check_idxs] == maxv).any(axis=0)  # (H,W) bool
     if sat_any.any():
-        n_pix = int(sat_any.sum())
         if verbose:
-            print("ignore_overexposed: zeroing {} saturated pixels (dtype max = {}).".format(n_pix, maxv))
+            print("ignore_overexposed: zeroing {} saturated pixels (dtype max = {})."
+                  .format(int(sat_any.sum()), maxv))
         base2d_f32[0][sat_any] = 0.0
-        # zero across all comparison channels we will use for this run
         compare3d_f32[:] = np.where(sat_any[None, :, :], 0.0, compare3d_f32)
+    return sat_any
+
+def _inpaint_with_k_median(arr2d, sat_mask, k=10):
+    """
+    Fill pixels that were zeroed by saturation handling using median of k nearest
+    non-zero, non-saturated pixels in arr2d.
+    - arr2d: float32 (H,W)
+    - sat_mask: bool (H,W) with True where saturation was detected
+    """
+    if sat_mask is None or not sat_mask.any():
+        return arr2d
+
+    # Only fill those positions that (a) were saturated and (b) are zero now.
+    target_mask = sat_mask & (arr2d == 0)
+    if not target_mask.any():
+        return arr2d
+
+    # Donors: not saturated and currently non-zero
+    donors_mask = (~sat_mask) & (arr2d != 0)
+    if not donors_mask.any():
+        # Fallback: global median of non-zero pixels (if any)
+        nz = arr2d[arr2d != 0]
+        fill_val = float(np.median(nz)) if nz.size else 0.0
+        arr2d[target_mask] = fill_val
+        return arr2d
+
+    donors_coords = np.column_stack(np.nonzero(donors_mask))  # (N,2) -> [row, col]
+    donors_vals   = arr2d[donors_mask].astype(np.float32)
+
+    targets_coords = np.column_stack(np.nonzero(target_mask))
+    k_eff = int(min(k, donors_coords.shape[0]))
+
+    tree = cKDTree(donors_coords.astype(np.float32))
+    # Query all targets at once
+    dists, idxs = tree.query(targets_coords.astype(np.float32), k=k_eff)
+
+    # If k_eff == 1, idxs has shape (M,), make it 2D for consistent median
+    if k_eff == 1:
+        fill_vals = donors_vals[idxs]
+    else:
+        fill_vals = np.median(donors_vals[idxs], axis=1)
+
+    # Assign fills
+    arr2d[targets_coords[:, 0], targets_coords[:, 1]] = fill_vals.astype(arr2d.dtype, copy=False)
+    return arr2d
 
 # ─────────────────────────────────── main ───────────────────────────────────────
 if __name__ == "__main__":
@@ -375,7 +405,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--patsize", type=int, default=DEFAULT_PATSIZE,
                         help="Patch size (default: 16)")
     parser.add_argument("--ignore_overexposed", action="store_true",
-                        help="If set, pixels saturated at dtype max in the base or any compared channels are zeroed before processing (per run).")
+                        help="If set, pixels saturated at dtype max in the base or any compared channels are zeroed before processing (per run), then inpainted afterward.")
     args = parser.parse_args()
 
     file_name = args.image
@@ -383,18 +413,18 @@ if __name__ == "__main__":
     _set_patsize(args.patsize)
     ignore_overexposed = bool(args.ignore_overexposed)
 
-    # Legacy argv parsing kept (as in prior versions) to avoid behavior changes
-    # for callers that relied on positional parsing only.
+    # Legacy argv handling kept for compatibility with positional-only callers
     if len(sys.argv) < 2:
         print("Usage: {} <image.tif> [channel]".format(sys.argv[0]))
         sys.exit(1)
     file_name = sys.argv[1]
-    single_chan = int(sys.argv[2]) - 1 if len(sys.argv) > 2 and sys.argv[2].isdigit() else single_chan
+    if len(sys.argv) > 2 and sys.argv[2].isdigit():
+        single_chan = int(sys.argv[2]) - 1 if args.channel is None else single_chan
 
     # read input once
     raw = imread(file_name)
     swapped_rgb = False
-    if raw.shape[-1] == 3:
+    if raw.shape[-1] == 3:  # RGB last -> (3,H,W)
         raw = np.swapaxes(raw, -2, -1)
         raw = np.swapaxes(raw, -3, -2)
         swapped_rgb = True
@@ -421,8 +451,8 @@ if __name__ == "__main__":
         start_time = time.time()
 
         # working copies (float32)
-        base2d_f32 = _clone(inpnorm[oz:oz+1, :, :])  # (1,H,W)
-        compare3d_f32 = _clone(inpnorm)              # (C,H,W)
+        base2d_f32     = _clone(inpnorm[oz:oz+1, :, :])  # (1,H,W)
+        compare3d_f32  = _clone(inpnorm)                 # (C,H,W)
 
         # inclusion set from CSV (if any)
         included = None
@@ -439,12 +469,12 @@ if __name__ == "__main__":
         else:
             check_idxs = np.unique(np.concatenate([included, np.array([oz], dtype=np.int64)]))
 
-        # --- NEW: zero saturated pixels if requested (per-run) ---
+        sat_mask = None
         if ignore_overexposed:
-            _zero_overexposed_for_run(base2d_f32, compare3d_f32, raw, check_idxs, verbose=True)
+            sat_mask = _zero_overexposed_for_run(base2d_f32, compare3d_f32, raw, check_idxs, verbose=True)
 
         # shape to (B=1,C,H,W) for the downstream code
-        base2d    = _unsqueeze(base2d_f32, 0)   # (1,1,H,W)
+        base2d    = _unsqueeze(base2d_f32, 0)     # (1,1,H,W)
         compare3d = _unsqueeze(compare3d_f32, 0)  # (1,C,H,W)
 
         # keep a copy of the current base channel for later steps
@@ -634,9 +664,15 @@ if __name__ == "__main__":
         shm_base2d.close(); shm_base2d.unlink()
         shm_rf.close();     shm_rf.unlink()
 
-        dom2d  = fold(dom2d)
-        dummy  = fold(dummy)
-        dom2d  = dom2d / dummy
+        dom2d  = _fold4d(dom2d, (H, W), (patsize, patsize))
+        dummy  = _fold4d(dummy, (H, W), (patsize, patsize))
+        dom2d  = dom2d / dummy  # float32, shape (1,1,H,W)
+
+        # ---- NEW: inpaint saturated pixels that remained zero ----
+        if ignore_overexposed and sat_mask is not None and sat_mask.any():
+            arr2d = dom2d[0, 0]  # (H,W) float32
+            dom2d[0, 0] = _inpaint_with_k_median(arr2d, sat_mask, k=10)
+
         dom2d  = np.clip(dom2d,
                          np.min(raw[oz, :, :]),
                          np.max(raw[oz, :, :]))
