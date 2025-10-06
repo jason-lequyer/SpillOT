@@ -1,4 +1,14 @@
-# Group rules (used only for initial auto-assignment)
+# Debleed runner (Fiji / Jython) with:
+# - Co-expression groups UI & persistence via CSV
+# - No default singleton groups (except from text rules or prior CSV)
+# - "Add ->" adds to selected/right group
+# - Defaults to debleeding all channels
+# - Fixed progress text "i / N (XX%)"
+# - Optional "Opal Vectra Data?" -> passes --opal_vectra to debleed.py
+
+# ---------------------------------------------------------------------
+# Group rules (used only for initial auto-assignment when NO saved CSV)
+# ---------------------------------------------------------------------
 groups_by_name = [
     # The big immune / structural set
     ["CA2", "CD116", "CD14", "CD20", "CD3", "CD4", "CD44", "CD45",
@@ -10,7 +20,7 @@ groups_by_name = [
     # Vascular / stem-cell pair
     ["NESTIN", "CD31"],
 
-    # Singletons
+    # Singletons (allowed by rules; not auto-created otherwise)
     ["HLA-ABC"],
     ["C-PEPTIDE"],
     ["GLUCAGON"],
@@ -48,15 +58,11 @@ def _fmt_elapsed(sec):
     return ("%02d:%02d:%02d" % (h, m, s)) if h else ("%02d:%02d" % (m, s))
 
 def _show_progress(total_channels):
-    """Return (dialog, progress_bar, timer). Caller must stop timer and dispose dialog."""
     start_ts = time.time()
-
     dlg = JDialog(None, "Debleeding", False)  # modeless
     dlg.setLayout(BorderLayout())
-
     lbl_txt = "Debleeding channel" if total_channels == 1 else "Debleeding %d channels" % total_channels
     dlg.add(JLabel(lbl_txt), BorderLayout.NORTH)
-
     bar = JProgressBar()
     bar.setStringPainted(False)
     if total_channels == 1:
@@ -67,78 +73,54 @@ def _show_progress(total_channels):
         bar.setMaximum(total_channels)
         bar.setValue(0)
     dlg.add(bar, BorderLayout.CENTER)
-
     elapsed_lbl = JLabel("Elapsed: 00:00")
     dlg.add(elapsed_lbl, BorderLayout.SOUTH)
-
     dlg.setSize(300, 100)
     dlg.setLocationRelativeTo(None)
     dlg.setVisible(True)
-
     class _Tick(ActionListener):
         def actionPerformed(self, evt):
             elapsed_lbl.setText("Elapsed: " + _fmt_elapsed(time.time() - start_ts))
             elapsed_lbl.repaint()
-
-    t = Timer(1000, _Tick())
-    t.setRepeats(True)
-    t.start()
-
+    t = Timer(1000, _Tick()); t.setRepeats(True); t.start()
     return dlg, bar, t
 
 def _pb_smooth_to(bar, new_value, duration_ms=250):
-    """Animate bar value to new_value over duration_ms using a short Swing Timer."""
     if bar.isIndeterminate():
         return
     new_value = max(bar.getMinimum(), min(bar.getMaximum(), int(new_value)))
     start = bar.getValue()
     if new_value == start:
         return
-
     prev = bar.getClientProperty("pbTweenTimer")
     if prev is not None:
-        try:
-            prev.stop()
-        except:
-            pass
-
-    steps = max(1, int(duration_ms / 40))  # ~25 FPS
+        try: prev.stop()
+        except: pass
+    steps = max(1, int(duration_ms / 40))
     delta = float(new_value - start) / steps
     state = {"i": 0, "val": float(start)}
-
     class _Step(ActionListener):
         def actionPerformed(self, evt):
             state["i"] += 1
             if state["i"] >= steps:
-                bar.setValue(new_value)
-                bar.repaint()
-                try:
-                    evt.getSource().stop()
-                except:
-                    pass
-                bar.putClientProperty("pbTweenTimer", None)
-                return
+                bar.setValue(new_value); bar.repaint()
+                try: evt.getSource().stop()
+                except: pass
+                bar.putClientProperty("pbTweenTimer", None); return
             state["val"] += delta
-            bar.setValue(int(round(state["val"])))
-            bar.repaint()
-
+            bar.setValue(int(round(state["val"]))); bar.repaint()
     timer = Timer(int(round(float(duration_ms) / steps)), _Step())
-    timer.setRepeats(True)
-    timer.start()
+    timer.setRepeats(True); timer.start()
     bar.putClientProperty("pbTweenTimer", timer)
 
 def _pb_cleanup(bar, timer):
-    try:
-        timer.stop()
-    except:
-        pass
+    try: timer.stop()
+    except: pass
     try:
         t = bar.getClientProperty("pbTweenTimer")
         if t is not None:
-            t.stop()
-            bar.putClientProperty("pbTweenTimer", None)
-    except:
-        pass
+            t.stop(); bar.putClientProperty("pbTweenTimer", None)
+    except: pass
 
 # ---------------------------------------------------------------------
 # Conda env helpers (with macOS /opt/anaconda3/envs/rfot added)
@@ -163,7 +145,6 @@ def _subproc_env_for_conda_env(env_root):
     return env
 
 def _guess_conda_env_root(env_name="rfot"):
-    """Try to find a conda/mamba env called 'rfot' and return its root."""
     try:
         home = os.path.expanduser("~")
         cands = []
@@ -177,14 +158,11 @@ def _guess_conda_env_root(env_name="rfot"):
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 out, _ = p.communicate(timeout=1.0)
                 base = out.decode("utf-8","ignore").strip()
-                if base:
-                    cands.insert(0, os.path.join(base, "envs", env_name))
+                if base: cands.insert(0, os.path.join(base, "envs", env_name))
             except Exception:
                 pass
         else:
-            # macOS requested path first
             cands = ["/opt/anaconda3/envs/%s" % env_name]
-            # common local installs under $HOME
             cands += [os.path.join(home, d, "envs", env_name)
                       for d in ("mambaforge","miniforge3","miniconda3","anaconda3")]
             try:
@@ -192,18 +170,14 @@ def _guess_conda_env_root(env_name="rfot"):
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 out, _ = p.communicate(timeout=1.0)
                 base = out.decode("utf-8","ignore").strip()
-                if base:
-                    cands.insert(0, os.path.join(base, "envs", env_name))
+                if base: cands.insert(0, os.path.join(base, "envs", env_name))
             except Exception:
                 pass
-
         pref = os.environ.get("CONDA_PREFIX")
         if pref and os.path.basename(pref).lower() == env_name.lower() and os.path.isdir(pref):
             cands.insert(0, pref)
-
         for c in cands:
-            if not c:
-                continue
+            if not c: continue
             py = _python_from_env(c)
             if os.path.isdir(c) and os.path.exists(py):
                 return c
@@ -231,7 +205,7 @@ except Exception:
 
 force_temp_save = False
 
-# If RGB-color composite with single channel, split to R/G/B stacks
+# Split RGB composite with single channel to R/G/B stacks
 is_rgb_color = (imp.getType() == ImagePlus.COLOR_RGB and imp.getNChannels() == 1)
 if is_rgb_color:
     splits = ChannelSplitter.split(imp)  # [R,G,B]
@@ -239,7 +213,6 @@ if is_rgb_color:
     Z = max(splits[0].getNSlices(), 1)
     T = max(splits[0].getNFrames(), 1)
     labels = ["Red", "Green", "Blue"]
-
     stack = ImageStack(w, h)
     for t in range(1, T + 1):
         for z in range(1, Z + 1):
@@ -247,7 +220,6 @@ if is_rgb_color:
                 src = splits[ci - 1]
                 idx = src.getStackIndex(1, z, t)
                 stack.addSlice(lab, src.getStack().getProcessor(idx))
-
     imp = ImagePlus(imp.getTitle() + " (RGB split)", stack)
     imp.setDimensions(3, Z, T)
     imp.setOpenAsHyperStack(True)
@@ -294,36 +266,102 @@ pre, suf = common_pref(raw), common_suff(raw)
 names = [ (s[len(pre):len(s)-len(suf)] or s) if suf else (s[len(pre):] or s) for s in raw ]
 
 # ---------------------------------------------------------------------
-# Build initial groups from rules (same logic as before)
+# Helpers to build/restore groups
 # ---------------------------------------------------------------------
-groups = []
-assigned = set()
-
-def tok_match(ref, cand):
+def _tok_match(ref, cand):
     pat = r'(?i)(?:^|[^0-9A-Z])' + re.escape(ref) + r'(?:[^0-9A-Z]|$)'
     return re.search(pat, cand) is not None
 
-compiled = [(ref.upper(), gi, len(ref)) for gi, g in enumerate(groups_by_name) for ref in g]
-for idx, ch in enumerate([n.upper() for n in names]):
-    best = None
-    for ref, gi, rl in compiled:
-        if tok_match(ref, ch) and (best is None or rl > best[1]):
-            best = (gi, rl)
-    if best:
-        gi = best[0]
-        while len(groups) <= gi:
-            groups.append([])
-        groups[gi].append(idx)
-        assigned.add(idx)
+def _auto_groups_from_rules(names):
+    groups = []
+    compiled = [(ref.upper(), gi, len(ref)) for gi, g in enumerate(groups_by_name) for ref in g]
+    for idx, ch in enumerate([n.upper() for n in names]):
+        best = None
+        for ref, gi, rl in compiled:
+            if _tok_match(ref, ch) and (best is None or rl > best[1]):
+                best = (gi, rl)
+        if best:
+            gi = best[0]
+            while len(groups) <= gi:
+                groups.append([])
+            groups[gi].append(idx)
+    groups = [sorted(g) for g in groups if g]
+    return groups
 
-for idx in range(n_ch):
-    if idx not in assigned:
-        groups.append([idx])
-
-groups = [sorted(g) for g in groups if g]
+def _load_groups_from_saved_csv(csv_path, names):
+    if not os.path.exists(csv_path):
+        return []
+    try:
+        with open(csv_path, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        if not lines: return []
+        header = [c.strip() for c in lines[0].split(",")]
+        if len(header) < 2: return []
+        header_names = header[1:]
+        name_to_idx = {nm.upper(): i for i, nm in enumerate(names)}
+        col_to_idx = []
+        for nm in header_names:
+            i = name_to_idx.get(nm.upper(), None)
+            if i is None:
+                cand = None
+                for cur_nm, cur_i in name_to_idx.items():
+                    if _tok_match(nm.upper(), cur_nm):
+                        cand = name_to_idx[cur_nm]; break
+                if cand is None: return []
+                i = cand
+            col_to_idx.append(i)
+        zero_pairs = set()
+        for rline in lines[1:]:
+            cells = [c.strip() for c in rline.split(",")]
+            if len(cells) < 2: continue
+            row_nm = cells[0]
+            row_idx = name_to_idx.get(row_nm.upper(), None)
+            if row_idx is None:
+                for cur_nm, cur_i in name_to_idx.items():
+                    if _tok_match(row_nm.upper(), cur_nm):
+                        row_idx = cur_i; break
+            if row_idx is None: continue
+            vals = cells[1:]
+            for j, v in enumerate(vals):
+                if j >= len(col_to_idx): break
+                col_idx = col_to_idx[j]
+                if row_idx != col_idx and v == "0":
+                    zero_pairs.add((row_idx, col_idx))
+                    zero_pairs.add((col_idx, row_idx))
+        if not zero_pairs: return []
+        neighbors = {i: set() for i in range(len(names))}
+        for i, j in zero_pairs:
+            neighbors[i].add(j); neighbors[j].add(i)
+        sys.setrecursionlimit(10000)
+        cliques, seen = [], set()
+        def bronk(R, P, X):
+            if not P and not X:
+                if len(R) >= 2:
+                    key = tuple(sorted(R))
+                    if key not in seen:
+                        seen.add(key); cliques.append(sorted(R))
+                return
+            u = next(iter(P | X)) if (P or X) else None
+            Nu = neighbors.get(u, set()) if u is not None else set()
+            for v in list(P - Nu):
+                Nv = neighbors.get(v, set())
+                bronk(R | {v}, P & Nv, X & Nv)
+                P.remove(v); X.add(v)
+        bronk(set(), set(range(len(names))), set())
+        return [sorted(g) for g in cliques]
+    except Exception:
+        return []
 
 # ---------------------------------------------------------------------
-# Multi-group UI: left list shows all channels + their current groups
+# Build initial groups (prefer CSV, else rules; no auto singletons otherwise)
+# ---------------------------------------------------------------------
+groups_csv_path = os.path.splitext(img_path)[0] + ".csv"
+groups = _load_groups_from_saved_csv(groups_csv_path, names)
+if not groups:
+    groups = _auto_groups_from_rules(names)
+
+# ---------------------------------------------------------------------
+# Multi-group UI
 # ---------------------------------------------------------------------
 def _groups_for_channel(idx):
     return ["Group %d" % (gi + 1) for gi, g in enumerate(groups) if idx in g]
@@ -333,8 +371,7 @@ def build_avail_model():
     for i, nm in enumerate(names):
         gs = _groups_for_channel(i)
         if gs:
-            html = "<html><b>%s</b><br/><span style='font-size:9px;color:gray'>%s</span></html>" % (
-                nm, ", ".join(gs))
+            html = "<html><b>%s</b><br/><span style='font-size:9px;color:gray'>%s</span></html>" % (nm, ", ".join(gs))
         else:
             html = "<html><b>%s</b><br/><span style='font-size:9px;color:#b00'>(no groups)</span></html>" % nm
         model.addElement(html)
@@ -360,7 +397,6 @@ btn_add  = JButton("Add ->")
 btn_rem  = JButton("<- Remove")
 
 def refresh():
-    """Refresh both lists so memberships and numbering stay in sync."""
     global groups_model, meta, avail_model
     groups_model, meta = build_group_model()
     group_list.setModel(groups_model)
@@ -368,52 +404,52 @@ def refresh():
     avail_list.setModel(avail_model)
 
 def on_new(_):
-    # Create a new group from selected channels on the left (multi-select)
     idxs = list(avail_list.getSelectedIndices())
     if idxs:
         groups.append(sorted(set(int(i) for i in idxs)))
         refresh()
 
 def on_add(_):
-    # Add selected channels (left) to the selected group header (right); or create a new group.
     idxs = list(avail_list.getSelectedIndices())
     if not idxs: return
-    selG = group_list.getSelectedIndex()
-    gi = meta[selG][1] if selG >= 0 and meta[selG][0] == "H" else len(groups)
-    if gi == len(groups):
-        groups.append([])
+    selR = list(group_list.getSelectedIndices())
+    if selR:
+        typ, gi, _idx = meta[selR[0]]
+        target_gi = gi
+        if target_gi >= len(groups) or target_gi < 0:
+            groups.append([]); target_gi = len(groups) - 1
+    else:
+        groups.append([]); target_gi = len(groups) - 1
     for i in idxs:
         i = int(i)
-        if i not in groups[gi]:
-            groups[gi].append(i)
-    groups[gi] = sorted(groups[gi])
+        if i not in groups[target_gi]:
+            groups[target_gi].append(i)
+    groups[target_gi] = sorted(groups[target_gi])
     refresh()
 
 def on_rem(_):
-    # Remove selected channel entries from their respective groups. Drop empty groups.
     selected = sorted(group_list.getSelectedIndices(), reverse=True)
     any_change = False
     for li in selected:
         typ, gi, idx = meta[li]
         if typ == "C":
-            try:
-                groups[gi].remove(idx)
-                any_change = True
-            except ValueError:
-                pass
+            try: groups[gi].remove(idx); any_change = True
+            except ValueError: pass
+        elif typ == "H":
+            try: groups.pop(gi); any_change = True
+            except Exception: pass
     for gi in reversed(range(len(groups))):
         if not groups[gi]:
-            groups.pop(gi)
-            any_change = True
-    if any_change:
-        refresh()
+            groups.pop(gi); any_change = True
+    if any_change: refresh()
 
 def _parse_channels(spec, max_ch):
-    # Parse "1,3-5" -> [1,3,4,5] (1-based)
+    spec = (spec or "").strip().lower()
+    if spec in ("", "all", "*", "everything"):
+        return list(range(1, max_ch + 1))
     out = []
     for token in re.split(r"[,\s]+", spec):
-        if not token:
-            continue
+        if not token: continue
         if "-" in token:
             lo, hi = token.split("-", 1)
             out.extend(range(int(lo), int(hi) + 1))
@@ -424,38 +460,39 @@ def _parse_channels(spec, max_ch):
 for b, f in ((btn_new, on_new), (btn_add, on_add), (btn_rem, on_rem)):
     b.addActionListener(f)
 
-mid = JPanel()
-mid.setLayout(BoxLayout(mid, BoxLayout.Y_AXIS))
+mid = JPanel(); mid.setLayout(BoxLayout(mid, BoxLayout.Y_AXIS))
 for b in (btn_new, btn_add, btn_rem):
     mid.add(b)
 mid.setPreferredSize(Dimension(BUTTON_COL_W, mid.getPreferredSize().height))
 mid.setMaximumSize(Dimension(BUTTON_COL_W, 1000))
 
-editor = JPanel()
-editor.setLayout(BoxLayout(editor, BoxLayout.X_AXIS))
-editor.add(JScrollPane(avail_list))
-editor.add(mid)
-editor.add(JScrollPane(group_list))
+editor = JPanel(); editor.setLayout(BoxLayout(editor, BoxLayout.X_AXIS))
+editor.add(JScrollPane(avail_list)); editor.add(mid); editor.add(JScrollPane(group_list))
 
 panel = JPanel(BorderLayout())
 
-# ASCII-only UI text; &mdash; to avoid stray characters on some setups
-panel_title = ("<html><b>Co-localizing groups</b> &nbsp;&mdash;&nbsp; "
-               "Channels can be in <b>multiple</b> groups. The left list shows each channel and its current memberships."
-               "</html>")
-panel.add(JLabel(panel_title), BorderLayout.NORTH)
+panel_title = ("<html><b>Co-expression groups</b> &nbsp;&mdash;&nbsp; "
+               "Put channels that co-express in the same group. "
+               "Channels that share any group are <b>not</b> used to debleed each other. "
+               "Channels may be in <b>multiple</b> groups, and leaving a channel ungrouped is OK "
+               "(it will factor in all other channels).</html>")
+panel_tip = ("<html><span style='font-size:9px;color:gray'>Tip: Select a group (or a member of a group) on the right, "
+             "select channel(s) on the left, then click <b>Add -&gt;</b> to add them to that same group.</span></html>")
+
+north = JPanel(); north.setLayout(BoxLayout(north, BoxLayout.Y_AXIS))
+north.add(JLabel(panel_title))
+north.add(JLabel(panel_tip))
+panel.add(north, BorderLayout.NORTH)
 panel.add(editor, BorderLayout.CENTER)
 
-# Dock-safe sizing: respect screen insets and add bottom padding to avoid macOS Dock
+# Dock-safe sizing
 ge = GraphicsEnvironment.getLocalGraphicsEnvironment()
 gc = ge.getDefaultScreenDevice().getDefaultConfiguration()
 scr = Toolkit.getDefaultToolkit().getScreenSize()
 ins = Toolkit.getDefaultToolkit().getScreenInsets(gc)
-
 usable_w = scr.width  - ins.left - ins.right
 usable_h = scr.height - ins.top  - ins.bottom
-
-DOCK_PAD = 120  # extra clearance above Dock/taskbar
+DOCK_PAD = 120
 panel.setPreferredSize(Dimension(
     min(DIALOG_W, max(400, usable_w - MARGIN_W)),
     min(DIALOG_H, max(400, usable_h - MARGIN_H - DOCK_PAD))
@@ -466,7 +503,7 @@ if JOptionPane.showConfirmDialog(None, panel, "Bleed-through groups",
     sys.exit()
 
 # ---------------------------------------------------------------------
-# CSV (pairs share ANY group => 0)
+# CSV (pairs share ANY group => 0, others 1). Persist for future runs.
 # ---------------------------------------------------------------------
 zero = {(i, j) for g in groups for i, j in itertools.permutations(g, 2)}
 csv = ["," + ",".join(names)]
@@ -475,7 +512,7 @@ for r in range(n_ch):
     for c in range(n_ch):
         row.append("0" if r == c or (r, c) in zero else "1")
     csv.append(",".join(row))
-with open(os.path.splitext(img_path)[0] + ".csv", "w") as f:
+with open(groups_csv_path, "w") as f:
     f.write("\n".join(csv))
 
 # ---------------------------------------------------------------------
@@ -492,10 +529,11 @@ dlg.addMessage(
     "\n"
     "Optionally, ignore overexposed pixels by setting saturated pixels to 0."
 )
-dlg.addStringField("Channel(s) to debleed (e.g. 1,3-5):", "1")
+dlg.addStringField("Channel(s) to debleed (e.g. 1,3-5 or 'all'):", "all")
 dlg.addNumericField("Patch size (patsize):", 16, 0)
 dlg.addStringField("Conda env path (root of env, e.g. .../envs/rfot):", _prefilled_env or "", 50)
 dlg.addCheckbox("Ignore overexposed pixels (set saturated to 0)", False)
+dlg.addCheckbox("Opal Vectra Data?", False)
 
 dlg.showDialog()
 if dlg.wasCanceled():
@@ -505,14 +543,13 @@ chan_spec = dlg.getNextString().strip()
 patsize = int(round(dlg.getNextNumber()))
 env_root = dlg.getNextString().strip()
 ignore_overexposed = dlg.getNextBoolean()
+opal_vectra = dlg.getNextBoolean()
 
-# Validate patsize
 if dlg.invalidNumber() or patsize < 4 or (patsize % 2 != 0):
     IJ.showMessage("Invalid patch size",
                    "Patch size must be an EVEN integer >= 4.\nYou entered: %s." % patsize)
     sys.exit()
 
-# Resolve env root
 if not env_root:
     env_root = _guess_conda_env_root("rfot")
 if not env_root:
@@ -543,8 +580,7 @@ debleed_py_candidates = [
 debleed_py = None
 for p in debleed_py_candidates:
     if os.path.exists(p):
-        debleed_py = p
-        break
+        debleed_py = p; break
 if not debleed_py:
     abort("Could not find 'debleed.py'. Put it in:\n" + "\n".join(debleed_py_candidates))
 
@@ -557,17 +593,22 @@ if len(channels) > 1:
     wait_bar.setIndeterminate(False)
     wait_bar.setMinimum(0); wait_bar.setMaximum(len(channels))
     wait_bar.setValue(0); wait_bar.setStringPainted(True)
-    wait_bar.setString("0 / %d" % len(channels))
+    wait_bar.setString("0 / %d (0%%)" % len(channels))
 
 try:
     for i, ch in enumerate(channels, start=1):
         IJ.showStatus("Debleeding channel %d of %d" % (i, len(channels)))
         if len(channels) > 1:
-            _pb_smooth_to(wait_bar, i - 1)
+            _pb_smooth_to(wait_bar, i)
+            pct = int(round(100.0 * i / float(len(channels))))
+            wait_bar.setString("%d / %d (%d%%)" % (i, len(channels), pct))
+            wait_bar.repaint()
 
         cmd = [pyexe, debleed_py, img_path, str(ch), "--patsize", str(patsize)]
         if ignore_overexposed:
             cmd.append("--ignore_overexposed")
+        if opal_vectra:
+            cmd.append("--opal_vectra")
 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=subproc_env)
         stdout, stderr = proc.communicate()
@@ -580,9 +621,6 @@ try:
         if not os.path.exists(out):
             abort("Result not found for channel %d:\n%s" % (ch, out))
         paths.append(out)
-
-        if len(channels) > 1:
-            _pb_smooth_to(wait_bar, i)
 finally:
     _pb_cleanup(wait_bar, wait_timer)
     wait_dlg.dispose()
@@ -596,7 +634,7 @@ if not paths:
     abort("No output files generated.")
 
 opener = Opener()
-imps = [opener.openImage(p) for p in paths]  # one ImagePlus per channel
+imps = [opener.openImage(p) for p in paths]
 
 def _channel_label_with_groups(zero_based_idx):
     nm = names[zero_based_idx]
@@ -608,19 +646,16 @@ if len(imps) == 1:
     stk_single = imp_single.getStack()
     ch0 = channels[0] - 1
     stk_single.setSliceLabel(_channel_label_with_groups(ch0), 1)
-    imp_single.updateAndDraw()
-    imp_single.show()
+    imp_single.updateAndDraw(); imp_single.show()
 else:
     w, h = imps[0].getWidth(), imps[0].getHeight()
     stack = ImageStack(w, h)
     for imp_ in imps:
         stack.addSlice(imp_.getProcessor())
     result = ImagePlus("Debleed combined", stack)
-    result.setDimensions(len(imps), 1, 1)  # C, Z, T
+    result.setDimensions(len(imps), 1, 1)
     result.setOpenAsHyperStack(True)
     stk = result.getStack()
-    for c_idx, ch_num in enumerate(channels, start=1):  # 1-based
+    for c_idx, ch_num in enumerate(channels, start=1):
         stk.setSliceLabel(_channel_label_with_groups(ch_num - 1), c_idx)
-    result.updateAndDraw()
-    result.show()
-# ---------------------------------------------------------------------
+    result.updateAndDraw(); result.show()

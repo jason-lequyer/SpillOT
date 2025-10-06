@@ -17,6 +17,46 @@ from multiprocessing import shared_memory
 _SHM_HANDLES = []          # global registry to keep blocks alive
 # -------------------------------------------------
 
+def _invert_from_uint8(arr2d, minv, maxv, dtype_out):
+    """
+    Inverse of per-channel 8-bit scaling.
+    arr2d: float32 or uint8 in [0,255], 2D (H,W).
+    Returns 2D array in dtype_out with values mapped to [minv, maxv].
+    """
+    rng = float(maxv) - float(minv)
+    arr = arr2d.astype(np.float32, copy=False)
+    if rng > 0.0:
+        arr = arr * (rng / 255.0) + float(minv)
+    else:
+        arr = np.zeros_like(arr, dtype=np.float32) + float(minv)
+
+    if np.issubdtype(dtype_out, np.integer):
+        info = np.iinfo(dtype_out)
+        arr = np.rint(arr).clip(info.min, info.max).astype(dtype_out)
+    else:
+        arr = arr.astype(dtype_out)
+    return arr
+
+def _scale_to_uint8_per_channel(arr):
+    """
+    Per-channel 8-bit scaling:
+      arr_c := arr_c - min(arr_c)
+      arr_c := round(arr_c * 255 / max(arr_c))
+      dtype -> uint8, clipped [0,255]
+    Expects shape (C,H,W). Returns uint8 array (C,H,W).
+    """
+    a = arr.astype(np.float32, copy=False)
+    mins = a.min(axis=(1, 2), keepdims=True)
+    a -= mins
+    highs = a.max(axis=(1, 2), keepdims=True)
+    # Avoid divide-by-zero: where high==0, leave zeros
+    scale = np.zeros_like(highs, dtype=np.float32)
+    nz = highs > 0
+    scale[nz] = 255.0 / highs[nz]
+    a = np.rint(a * scale).clip(0, 255).astype(np.uint8)
+    return a
+
+
 def _to_shm(ndarray):
     shm = shared_memory.SharedMemory(create=True, size=ndarray.nbytes)
     view = np.ndarray(ndarray.shape, dtype=ndarray.dtype, buffer=shm.buf)
@@ -406,12 +446,18 @@ if __name__ == "__main__":
                         help="Patch size (default: 16)")
     parser.add_argument("--ignore_overexposed", action="store_true",
                         help="If set, pixels saturated at dtype max in the base or any compared channels are zeroed before processing (per run), then inpainted afterward.")
+    parser.add_argument("--opal_vectra", action="store_true",
+                    help="Per-channel 8-bit scaling before debleeding "
+                         "(min-subtract, scale to max=255, round, uint8).")
+
     args = parser.parse_args()
 
     file_name = args.image
     single_chan = (args.channel - 1) if args.channel is not None else None
     _set_patsize(args.patsize)
     ignore_overexposed = bool(args.ignore_overexposed)
+    opal_vectra = bool(args.opal_vectra)
+
 
     # Legacy argv handling kept for compatibility with positional-only callers
     if len(sys.argv) < 2:
@@ -428,10 +474,28 @@ if __name__ == "__main__":
         raw = np.swapaxes(raw, -2, -1)
         raw = np.swapaxes(raw, -3, -2)
         swapped_rgb = True
+    
+    # Keep an untouched copy for saturation checks and for restoring dtype/range
+    raw_orig   = raw.copy()
+    orig_dtype = raw_orig.dtype
+    orig_mins  = raw_orig.min(axis=(1, 2))  # per-channel mins
+    orig_maxs  = raw_orig.max(axis=(1, 2))  # per-channel maxs
+    
+    # If opal_vectra: temporary per-channel scaling to uint8 for processing only
+    if opal_vectra:
+        print("Opal Vectra scaling: per-channel min-subtract + rescale to 8-bit (0..255) for processing only.")
+        raw_proc = _scale_to_uint8_per_channel(raw_orig)
+    else:
+        raw_proc = raw_orig
+    
+    # Proceed with processing on float32 working copy of raw_proc
+    n_chan, H, W = raw_proc.shape
+    inpnorm      = raw_proc.astype(np.float32)
+    
+    # IMPORTANT: Allocate output in the ORIGINAL dtype and shape
+    outstack     = np.empty_like(raw_orig)
 
-    n_chan, H, W = raw.shape
-    inpnorm      = raw.astype(np.float32)
-    outstack     = np.empty_like(raw)
+
 
     # optional CSV inclusion mask (read once)
     mask_matrix = None
@@ -471,7 +535,7 @@ if __name__ == "__main__":
 
         sat_mask = None
         if ignore_overexposed:
-            sat_mask = _zero_overexposed_for_run(base2d_f32, compare3d_f32, raw, check_idxs, verbose=True)
+            sat_mask = _zero_overexposed_for_run(base2d_f32, compare3d_f32, raw_orig, check_idxs, verbose=True)
 
         # shape to (B=1,C,H,W) for the downstream code
         base2d    = _unsqueeze(base2d_f32, 0)     # (1,1,H,W)
@@ -673,13 +737,26 @@ if __name__ == "__main__":
             arr2d = dom2d[0, 0]  # (H,W) float32
             dom2d[0, 0] = _inpaint_with_k_median(arr2d, sat_mask, k=10)
 
-        dom2d  = np.clip(dom2d,
-                         np.min(raw[oz, :, :]),
-                         np.max(raw[oz, :, :]))
-        dom2d  = dom2d.astype(raw.dtype)
+        # dom2d is float32 shaped (1,1,H,W)
+        arr2d = dom2d[0, 0]  # (H,W) float32
+        
+        if opal_vectra:
+            # We processed on 0..255 data; clamp then invert back to the original channel's range
+            arr2d = np.clip(arr2d, 0.0, 255.0)
+            arr2d = _invert_from_uint8(arr2d, orig_mins[oz], orig_maxs[oz], orig_dtype)
+        else:
+            # No temporary 8-bit scaling: just clip to the original channel's range, cast to original dtype
+            mn = float(orig_mins[oz]); mx = float(orig_maxs[oz])
+            arr2d = np.clip(arr2d, mn, mx)
+            if np.issubdtype(orig_dtype, np.integer):
+                info = np.iinfo(orig_dtype)
+                arr2d = np.rint(arr2d).clip(info.min, info.max).astype(orig_dtype)
+            else:
+                arr2d = arr2d.astype(orig_dtype)
+        
+        # write result into outstack in ORIGINAL dtype/range
+        outstack[oz] = arr2d
 
-        # write result into outstack
-        outstack[oz] = dom2d[0, 0]
         print("    Done in {:.2f}s".format(time.time() - start_time))
 
     # ───────────────────────────── save output ─────────────────────────────
