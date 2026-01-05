@@ -1,10 +1,16 @@
 # Debleed runner (Fiji / Jython) with:
 # - Co-expression groups UI & persistence via CSV
-# - No default singleton groups (except from text rules or prior CSV)
-# - "Add ->" adds to selected/right group
+# - Channel names prefer "Name #i = ..." from slice labels / metadata
+# - Auto-grouping: only create groups with >= 2 present channels (singletons only name-snap)
+# - "Add ->" adds to selected/right group, or last-used group if none selected
 # - Defaults to debleeding all channels
 # - Fixed progress text "i / N (XX%)"
-# - Optional "Opal Vectra Data?" -> passes --opal_vectra to debleed.py
+# - Prompts to save if image has unsaved changes, then debleeds saved file
+# - Extra co-expression rules for endothelial / immune / epithelial markers (+ your T-cell/nuclear)
+# - NEW: "Keep-the-brightest heuristic" checkbox (default ON)
+#        ON  -> run keep_the_brightest.py
+#        OFF -> run singal_based.py (also accepts signal_based.py)
+# - NEW: If "opal" or "vectra" appear in metadata and heuristic is ON, warn to turn it OFF
 
 # ---------------------------------------------------------------------
 # Group rules (used only for initial auto-assignment when NO saved CSV)
@@ -20,7 +26,7 @@ groups_by_name = [
     # Vascular / stem-cell pair
     ["NESTIN", "CD31"],
 
-    # Singletons (allowed by rules; not auto-created otherwise)
+    # Singletons (used only for canonical naming; auto-groups require >= 2 members)
     ["HLA-ABC"],
     ["C-PEPTIDE"],
     ["GLUCAGON"],
@@ -30,7 +36,20 @@ groups_by_name = [
     ["pS6"],
     ["HLA-DR"],
     ["PANCREATIC POLYPEPTIDE"],
-    ["GHRELIN"]
+    ["GHRELIN"],
+
+    # Endothelial cells
+    ["CD31", "LYVE1", "PNAd", "PDL1", "DAPI"],
+    # Immune cells (broad)
+    ["CD3", "PDL1", "DAPI"],
+    # Epithelial cells (PanCK + pan-Keratin as synonyms)
+    ["PanCK", "pan-Keratin", "PDL1", "DAPI"],
+
+    # T cells (your request)
+    ["CD8", "CD3", "tcrgd", "PD1"],
+
+    # Nuclear (your request)
+    ["Ki67", "DAPI"]
 ]
 
 # ---------------------------------------------------------------------
@@ -39,7 +58,7 @@ groups_by_name = [
 import os, sys, itertools, tempfile, subprocess, re, time
 from ij import IJ, ImagePlus, ImageStack
 from ij.gui import GenericDialog
-from ij.io import Opener
+from ij.io import Opener, FileSaver
 from ij.plugin import ChannelSplitter
 from javax.swing import (JPanel, JScrollPane, JList, DefaultListModel,
                          JButton, BoxLayout, JOptionPane, JLabel, JDialog, JProgressBar, Timer)
@@ -59,9 +78,9 @@ def _fmt_elapsed(sec):
 
 def _show_progress(total_channels):
     start_ts = time.time()
-    dlg = JDialog(None, "Debleeding", False)  # modeless
+    dlg = JDialog(None, "Processing", False)  # modeless
     dlg.setLayout(BorderLayout())
-    lbl_txt = "Debleeding channel" if total_channels == 1 else "Debleeding %d channels" % total_channels
+    lbl_txt = "Processing channel" if total_channels == 1 else "Processing %d channels" % total_channels
     dlg.add(JLabel(lbl_txt), BorderLayout.NORTH)
     bar = JProgressBar()
     bar.setStringPainted(False)
@@ -203,6 +222,26 @@ try:
 except Exception:
     abort("No image is open.")
 
+# If there are unsaved changes, prompt the user to save before running
+if getattr(imp, "changes", False):
+    res = JOptionPane.showConfirmDialog(
+        None,
+        "The current image has unsaved changes.\n\n"
+        "Processing will save the image before running.\n"
+        "Click OK to save and continue, or Cancel to abort.",
+        "Unsaved changes",
+        JOptionPane.OK_CANCEL_OPTION,
+        JOptionPane.WARNING_MESSAGE
+    )
+    if res != JOptionPane.OK_OPTION:
+        sys.exit()
+    try:
+        fs = FileSaver(imp)
+        if not fs.save():
+            abort("Image must be saved before running.")
+    except Exception as e:
+        abort("Could not save the image before running.\n\n%s" % str(e))
+
 force_temp_save = False
 
 # Split RGB composite with single channel to R/G/B stacks
@@ -225,8 +264,18 @@ if is_rgb_color:
     imp.setOpenAsHyperStack(True)
     force_temp_save = True
 
-# Ensure TIFF path
-fi = imp.getOriginalFileInfo()
+# Ensure TIFF path (prefer current file location)
+fi = None
+try:
+    fi = imp.getFileInfo()
+except Exception:
+    fi = None
+if (fi is None) or (not fi.directory) or (not fi.fileName):
+    try:
+        fi = imp.getOriginalFileInfo()
+    except Exception:
+        fi = None
+
 if (not force_temp_save) and fi and fi.directory and fi.fileName:
     img_path = os.path.join(fi.directory, fi.fileName)
 else:
@@ -239,6 +288,7 @@ axis_counts = {"channels": imp.getNChannels(),
                "slices":   imp.getNSlices(),
                "frames":   imp.getNFrames()}
 axis_used, n_ch = max(axis_counts.items(), key=lambda kv: kv[1])
+
 def slice_idx(c):
     if axis_used == "channels":
         return imp.getStackIndex(c, 1, 1)
@@ -247,9 +297,76 @@ def slice_idx(c):
     else:
         return imp.getStackIndex(1, 1, c)
 
-# Cleaned-up channel names
-raw = [(imp.getStack().getSliceLabel(slice_idx(i)) or "Ch%d" % i).split("\n")[0].strip()
-       for i in range(1, n_ch + 1)]
+# ---------------------------------------------------------------------
+# Metadata helpers
+# ---------------------------------------------------------------------
+def _collect_all_metadata_text(imp, n_ch):
+    texts = []
+    try:
+        info_prop = imp.getProperty("Info")
+    except Exception:
+        info_prop = None
+    if info_prop:
+        texts.append(str(info_prop))
+
+    try:
+        ofi = imp.getOriginalFileInfo()
+    except Exception:
+        ofi = None
+    if ofi is not None:
+        for attr in ("info", "description"):
+            try:
+                val = getattr(ofi, attr)
+            except Exception:
+                val = None
+            if val:
+                texts.append(str(val))
+
+    try:
+        cfi = imp.getFileInfo()
+    except Exception:
+        cfi = None
+    if cfi is not None:
+        for attr in ("info", "description"):
+            try:
+                val = getattr(cfi, attr)
+            except Exception:
+                val = None
+            if val:
+                texts.append(str(val))
+
+    stack = imp.getStack()
+    for i in range(1, n_ch + 1):
+        try:
+            idx = slice_idx(i)
+            lbl = stack.getSliceLabel(idx)
+        except Exception:
+            lbl = None
+        if lbl:
+            texts.append(str(lbl))
+    return "\n".join(texts) if texts else ""
+
+def _metadata_channel_names(imp, axis_used, n_ch):
+    texts = _collect_all_metadata_text(imp, n_ch)
+    if not texts:
+        return None
+    pat = re.compile(r"^\s*Name\s*#(\d+)\s*=\s*(.+)$")
+    out = [None] * n_ch
+    for line in texts.splitlines():
+        m = pat.match(line)
+        if not m:
+            continue
+        try:
+            idx = int(m.group(1))
+        except Exception:
+            continue
+        if 1 <= idx <= n_ch and out[idx - 1] is None:
+            out[idx - 1] = m.group(2).strip()
+    return out if any(out) else None
+
+# Baseline from slice labels (first line), used as fallback
+raw_labels = [(imp.getStack().getSliceLabel(slice_idx(i)) or "Ch%d" % i).split("\n")[0].strip()
+              for i in range(1, n_ch + 1)]
 
 def common_pref(lst):
     if not lst: return ""
@@ -262,31 +379,57 @@ def common_pref(lst):
 def common_suff(lst):
     return common_pref([s[::-1] for s in lst])[::-1]
 
-pre, suf = common_pref(raw), common_suff(raw)
-names = [ (s[len(pre):len(s)-len(suf)] or s) if suf else (s[len(pre):] or s) for s in raw ]
+pre, suf = common_pref(raw_labels), common_suff(raw_labels)
+fallback_names = [(s[len(pre):len(s) - len(suf)] or s) if suf else (s[len(pre):] or s)
+                  for s in raw_labels]
+
+# Try metadata-based channel names first, then fall back
+meta_names = _metadata_channel_names(imp, axis_used, n_ch)
+if meta_names and any(meta_names):
+    names = [meta_names[i] or fallback_names[i] for i in range(n_ch)]
+else:
+    names = fallback_names
 
 # ---------------------------------------------------------------------
-# Helpers to build/restore groups
+# Canonical name snapping via groups_by_name
 # ---------------------------------------------------------------------
 def _tok_match(ref, cand):
     pat = r'(?i)(?:^|[^0-9A-Z])' + re.escape(ref) + r'(?:[^0-9A-Z]|$)'
     return re.search(pat, cand) is not None
 
+def _canonicalize_names_via_rules(names, groups_by_name):
+    upper_names = [n.upper() for n in names]
+    for idx, ch in enumerate(upper_names):
+        best_ref, best_eq = None, -1
+        for rule_group in groups_by_name:
+            for ref in rule_group:
+                ref_up = ref.upper()
+                if _tok_match(ref_up, ch):
+                    eq_flag = 1 if ch.strip() == ref_up.strip() else 0
+                    if eq_flag > best_eq:
+                        best_eq = eq_flag; best_ref = ref
+        if best_ref is not None:
+            names[idx] = best_ref
+    return names
+
+names = _canonicalize_names_via_rules(names, groups_by_name)
+
+# ---------------------------------------------------------------------
+# Helpers to build/restore groups
+# ---------------------------------------------------------------------
 def _auto_groups_from_rules(names):
-    groups = []
-    compiled = [(ref.upper(), gi, len(ref)) for gi, g in enumerate(groups_by_name) for ref in g]
-    for idx, ch in enumerate([n.upper() for n in names]):
-        best = None
-        for ref, gi, rl in compiled:
-            if _tok_match(ref, ch) and (best is None or rl > best[1]):
-                best = (gi, rl)
-        if best:
-            gi = best[0]
-            while len(groups) <= gi:
-                groups.append([])
-            groups[gi].append(idx)
-    groups = [sorted(g) for g in groups if g]
-    return groups
+    if not groups_by_name:
+        return []
+    rule_groups = [[] for _ in groups_by_name]
+    upper_names = [n.upper() for n in names]
+    for idx, ch in enumerate(upper_names):
+        for gi, rule_group in enumerate(groups_by_name):
+            for ref in rule_group:
+                if _tok_match(ref.upper(), ch):
+                    if idx not in rule_groups[gi]:
+                        rule_groups[gi].append(idx)
+                    break
+    return [sorted(g) for g in rule_groups if len(g) >= 2]
 
 def _load_groups_from_saved_csv(csv_path, names):
     if not os.path.exists(csv_path):
@@ -353,7 +496,7 @@ def _load_groups_from_saved_csv(csv_path, names):
         return []
 
 # ---------------------------------------------------------------------
-# Build initial groups (prefer CSV, else rules; no auto singletons otherwise)
+# Build initial groups (prefer CSV, else rules; no auto singletons)
 # ---------------------------------------------------------------------
 groups_csv_path = os.path.splitext(img_path)[0] + ".csv"
 groups = _load_groups_from_saved_csv(groups_csv_path, names)
@@ -396,6 +539,8 @@ btn_new  = JButton("New  ->")
 btn_add  = JButton("Add ->")
 btn_rem  = JButton("<- Remove")
 
+last_add_group = None  # remembers last group index used by "Add ->"
+
 def refresh():
     global groups_model, meta, avail_model
     groups_model, meta = build_group_model()
@@ -404,14 +549,18 @@ def refresh():
     avail_list.setModel(avail_model)
 
 def on_new(_):
+    global last_add_group
     idxs = list(avail_list.getSelectedIndices())
     if idxs:
         groups.append(sorted(set(int(i) for i in idxs)))
+        last_add_group = len(groups) - 1
         refresh()
 
 def on_add(_):
+    global last_add_group
     idxs = list(avail_list.getSelectedIndices())
-    if not idxs: return
+    if not idxs:
+        return
     selR = list(group_list.getSelectedIndices())
     if selR:
         typ, gi, _idx = meta[selR[0]]
@@ -419,15 +568,20 @@ def on_add(_):
         if target_gi >= len(groups) or target_gi < 0:
             groups.append([]); target_gi = len(groups) - 1
     else:
-        groups.append([]); target_gi = len(groups) - 1
+        if last_add_group is not None and 0 <= last_add_group < len(groups):
+            target_gi = last_add_group
+        else:
+            groups.append([]); target_gi = len(groups) - 1
     for i in idxs:
         i = int(i)
         if i not in groups[target_gi]:
             groups[target_gi].append(i)
     groups[target_gi] = sorted(groups[target_gi])
+    last_add_group = target_gi
     refresh()
 
 def on_rem(_):
+    global last_add_group
     selected = sorted(group_list.getSelectedIndices(), reverse=True)
     any_change = False
     for li in selected:
@@ -441,6 +595,8 @@ def on_rem(_):
     for gi in reversed(range(len(groups))):
         if not groups[gi]:
             groups.pop(gi); any_change = True
+    if last_add_group is not None and last_add_group >= len(groups):
+        last_add_group = None
     if any_change: refresh()
 
 def _parse_channels(spec, max_ch):
@@ -520,7 +676,7 @@ with open(groups_csv_path, "w") as f:
 # ---------------------------------------------------------------------
 _prefilled_env = _guess_conda_env_root("rfot")
 
-dlg = GenericDialog("Run Debleed")
+dlg = GenericDialog("Run")
 dlg.addMessage(
     "Patch size controls the neighborhood used to resolve bleed-through.\n"
     "- Must be an EVEN integer >= 4.\n"
@@ -529,11 +685,12 @@ dlg.addMessage(
     "\n"
     "Optionally, ignore overexposed pixels by setting saturated pixels to 0."
 )
-dlg.addStringField("Channel(s) to debleed (e.g. 1,3-5 or 'all'):", "all")
+dlg.addStringField("Channel(s) to process (e.g. 1,3-5 or 'all'):", "all")
 dlg.addNumericField("Patch size (patsize):", 16, 0)
 dlg.addStringField("Conda env path (root of env, e.g. .../envs/rfot):", _prefilled_env or "", 50)
 dlg.addCheckbox("Ignore overexposed pixels (set saturated to 0)", False)
-dlg.addCheckbox("Opal Vectra Data?", False)
+# NEW checkbox (default ON)
+dlg.addCheckbox("Keep-the-brightest heuristic (recommended OFF for Opal/Vectra)", True)
 
 dlg.showDialog()
 if dlg.wasCanceled():
@@ -543,7 +700,7 @@ chan_spec = dlg.getNextString().strip()
 patsize = int(round(dlg.getNextNumber()))
 env_root = dlg.getNextString().strip()
 ignore_overexposed = dlg.getNextBoolean()
-opal_vectra = dlg.getNextBoolean()
+keep_brightest = dlg.getNextBoolean()  # NEW
 
 if dlg.invalidNumber() or patsize < 4 or (patsize % 2 != 0):
     IJ.showMessage("Invalid patch size",
@@ -570,19 +727,53 @@ if not os.path.exists(pyexe):
 subproc_env = _subproc_env_for_conda_env(env_root)
 
 # ---------------------------------------------------------------------
-# Launch Debleed (external Python)
+# If Opal/Vectra metadata is present and heuristic is ON, warn user
 # ---------------------------------------------------------------------
-plugins_dir = IJ.getDir("plugins")
-debleed_py_candidates = [
-    os.path.join(plugins_dir, "Debleed", "debleed.py"),
-    os.path.join(plugins_dir, "Debleed", "bin", "debleed.py"),
-]
-debleed_py = None
-for p in debleed_py_candidates:
-    if os.path.exists(p):
-        debleed_py = p; break
-if not debleed_py:
-    abort("Could not find 'debleed.py'. Put it in:\n" + "\n".join(debleed_py_candidates))
+meta_all = _collect_all_metadata_text(imp, n_ch) or ""
+if keep_brightest and re.search(r"\b(opal|vectra)\b", meta_all, re.IGNORECASE):
+    opts = ["Turn OFF & use signal-based", "Keep ON"]
+    choice = JOptionPane.showOptionDialog(
+        None,
+        ("We detected 'Opal'/'Vectra' in the image metadata.\n\n"
+         "The keep-the-brightest heuristic can be too aggressive for Opal/Vectra data.\n\n"
+         "What would you like to do for this run?"),
+        "Opal/Vectra data detected",
+        JOptionPane.DEFAULT_OPTION,
+        JOptionPane.WARNING_MESSAGE,
+        None, opts, opts[0]
+    )
+    if choice == 0:
+        keep_brightest = False  # Turn it OFF for this run
+
+# ---------------------------------------------------------------------
+# Launch runner (external Python) based on heuristic toggle
+# ---------------------------------------------------------------------
+def _find_runner_script(keep_brightest):
+    plugins_dir = IJ.getDir("plugins")
+    base = os.path.join(plugins_dir, "Debleed")
+    cand = []
+    if keep_brightest:
+        cand = [os.path.join(base, "keep_the_brightest.py"),
+                os.path.join(base, "bin", "keep_the_brightest.py")]
+    else:
+        # Accept both 'singal_based.py' (as requested) and 'signal_based.py'
+        cand = [os.path.join(base, "singal_based.py"),
+                os.path.join(base, "signal_based.py"),
+                os.path.join(base, "bin", "singal_based.py"),
+                os.path.join(base, "bin", "signal_based.py")]
+    for p in cand:
+        if os.path.exists(p):
+            return p
+    return None
+
+runner_py = _find_runner_script(keep_brightest)
+if not runner_py:
+    if keep_brightest:
+        abort("Could not find 'keep_the_brightest.py'. Put it in:\n"
+              + os.path.join(IJ.getDir('plugins'), "Debleed"))
+    else:
+        abort("Could not find 'singal_based.py' (or 'signal_based.py'). Put it in:\n"
+              + os.path.join(IJ.getDir('plugins'), "Debleed"))
 
 channels = _parse_channels(chan_spec, n_ch)
 if not channels:
@@ -597,25 +788,24 @@ if len(channels) > 1:
 
 try:
     for i, ch in enumerate(channels, start=1):
-        IJ.showStatus("Debleeding channel %d of %d" % (i, len(channels)))
+        IJ.showStatus("Processing channel %d of %d" % (i, len(channels)))
         if len(channels) > 1:
             _pb_smooth_to(wait_bar, i)
             pct = int(round(100.0 * i / float(len(channels))))
             wait_bar.setString("%d / %d (%d%%)" % (i, len(channels), pct))
             wait_bar.repaint()
 
-        cmd = [pyexe, debleed_py, img_path, str(ch), "--patsize", str(patsize)]
+        # Arguments match debleed.py interface
+        cmd = [pyexe, runner_py, img_path, str(ch), "--patsize", str(patsize)]
         if ignore_overexposed:
             cmd.append("--ignore_overexposed")
-        if opal_vectra:
-            cmd.append("--opal_vectra")
 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=subproc_env)
         stdout, stderr = proc.communicate()
 
         if proc.returncode != 0:
             err_msg = stderr.decode("utf-8", "replace")
-            abort("Debleed failed for channel %d (exit %d).\n\n%s" % (ch, proc.returncode, err_msg))
+            abort("Runner failed for channel %d (exit %d).\n\n%s" % (ch, proc.returncode, err_msg))
 
         out = "%s_Channel_%d_debleed.tif" % (img_path[:-4], ch)
         if not os.path.exists(out):
@@ -625,7 +815,7 @@ finally:
     _pb_cleanup(wait_bar, wait_timer)
     wait_dlg.dispose()
     IJ.showProgress(1.0)
-    IJ.showStatus("Debleed finished.")
+    IJ.showStatus("Finished.")
 
 # ---------------------------------------------------------------------
 # Combine outputs into a hyperstack and attach labels with group names
@@ -652,7 +842,7 @@ else:
     stack = ImageStack(w, h)
     for imp_ in imps:
         stack.addSlice(imp_.getProcessor())
-    result = ImagePlus("Debleed combined", stack)
+    result = ImagePlus("Processed combined", stack)
     result.setDimensions(len(imps), 1, 1)
     result.setOpenAsHyperStack(True)
     stk = result.getStack()
