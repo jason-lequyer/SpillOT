@@ -38,17 +38,17 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 3) Install the plugin into Fiji
    - Download this repository by clicking Code -> Download ZIP in the top right corner and unzip it on your computer
-   - Copy `plugins/RefineOT` into your Fiji plugins folder, for example you should end up with:
-     - macOS: `Fiji.app/plugins/RefineOT/`
-     - Windows: `Fiji.app\\plugins\\RefineOT\\`
-     - Linux: `Fiji.app/plugins/RefineOT/`
+   - Copy `plugins/Debleed` into your Fiji plugins folder, for example you should end up with:
+     - macOS: `Fiji.app/plugins/Debleed/`
+     - Windows: `Fiji.app\\plugins\\Debleed\\`
+     - Linux: `Fiji.app/plugins/Debleed/`
    - Restart Fiji or use Help -> Refresh Menus.
 
 ## How to Run in Fiji
 
 1) Open your image in Fiji. TIFF stacks are recommended. RGB images are supported and will be split into 3 channels automatically.
 2) Run the plugin from the menu if visible:
-   - Plugins -> RefineOT -> Debleed_Run
+   - Plugins -> Debleed -> Debleed_Run
    - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
 3) Now it will ask you to group co-expressing channels together:
    - This menu allows you to group co-expressing channels so they do not debleed each other. Use the matrix to exclude channels that share real signal, not bleed-through.
