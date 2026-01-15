@@ -48,7 +48,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 1) Open your image in Fiji. TIFF stacks are recommended. RGB images are supported and will be split into 3 channels automatically.
 2) Run the plugin from the menu if visible:
-   - Plugins -> RefineOT -> Debleed
+   - Plugins -> RefineOT -> Debleed_Run
    - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
 3) Now it will ask you to group co-expressing channels together:
    - This menu allows you to group co-expressing channels so they do not debleed each other. Use the matrix to exclude channels that share real signal, not bleed-through.
