@@ -1,675 +1,440 @@
-# Copyright 2025, Jason Lequyer, Ferris Nowlan and Laurence Pelletier.
-# All rights reserved.
-# Sinai Health System - Lunenfeld Tanenbaum Research Institute
-# 600 University Avenue, Room 1070, Toronto, ON M5G 1X5, Canada
-#
+#!/usr/bin/env python3
+"""
+debleed.py — terminal/cluster wrapper for Debleed runners.
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
+Default behavior:
+  - Uses keep-the-brightest runner (keep_the_brightest.py / keep_the_brigtest.py)
+
+Optional:
+  - --signal_based / --singal_based switches to signal-based runner
+  - Channels can be a single int (e.g. 21), a range/list (e.g. "1,3-5"), or "all"
+  - --patsize sets patch size (EVEN integer >= 4)
+  - --ignore_overexposed passes through to the runner scripts
+
+Assumptions:
+  - keep_the_brightest.py or keep_the_brigtest.py exists (unaltered)
+  - signal_based.py or singal_based.py exists (unaltered)
+  - co-expression/veto matrix CSV exists as <stack_basename>.csv (recommended)
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
 import os
-from tifffile import imread, imwrite, TiffFile
+import re
+import shlex
+import subprocess
 import sys
-import numpy as np
-from pathlib import Path
 import time
-from scipy.sparse import coo_matrix
-import scipy.sparse.csgraph as ssc
-from collections import Counter
-from scipy.optimize import linear_sum_assignment
-import pandas as pd
+from pathlib import Path
+from typing import List, Optional, Sequence, Tuple
 
 
+# -------------------------
+# Channel parsing
+# -------------------------
+def parse_channels(spec: str, max_ch: Optional[int]) -> List[int]:
+    """
+    Parse channels spec into a sorted unique list of 1-indexed channel numbers.
+    spec examples:
+      - "21"
+      - "1,3-5"
+      - "all"
+    """
+    spec_in = (spec or "").strip().lower()
+    if spec_in in ("", "all", "*", "everything"):
+        if max_ch is None:
+            raise ValueError(
+                "Channels spec is 'all', but I couldn't infer the number of channels.\n"
+                "Either:\n"
+                "  (1) install tifffile in your env, or\n"
+                "  (2) specify channels explicitly, e.g. '21' or '1,3-5'."
+            )
+        return list(range(1, max_ch + 1))
+
+    out: List[int] = []
+    tokens = re.split(r"[,\s]+", spec_in)
+    for tok in tokens:
+        if not tok:
+            continue
+        if "-" in tok:
+            lo_s, hi_s = tok.split("-", 1)
+            lo = int(lo_s)
+            hi = int(hi_s)
+            if hi < lo:
+                lo, hi = hi, lo
+            out.extend(range(lo, hi + 1))
+        else:
+            out.append(int(tok))
+
+    # unique + sorted + positive
+    out = sorted({c for c in out if c > 0})
+    return out
 
 
+# -------------------------
+# TIFF helpers (optional)
+# -------------------------
+def infer_n_channels(tif_path: Path) -> Optional[int]:
+    """
+    Try to infer number of channels/pages in the TIFF stack.
+    Uses tifffile if available. Returns None if inference fails.
+    """
+    try:
+        import tifffile  # type: ignore
+    except Exception:
+        return None
 
+    try:
+        with tifffile.TiffFile(str(tif_path)) as tif:
+            # Prefer series axes if present (OME-TIFF etc.)
+            try:
+                series0 = tif.series[0]
+                axes = getattr(series0, "axes", "") or ""
+                shape = getattr(series0, "shape", None)
+                if shape is not None and axes:
+                    # If explicit channel axis exists
+                    if "C" in axes:
+                        return int(shape[axes.index("C")])
+                    # Otherwise, many IMC stacks are pages ~= first dimension
+                    if len(shape) >= 3:
+                        return int(shape[0])
+            except Exception:
+                pass
+
+            # Fallback: number of pages
+            return int(len(tif.pages))
+    except Exception:
+        return None
+
+
+def collect_metadata_text(tif_path: Path) -> str:
+    """
+    Best-effort extraction of TIFF metadata text to detect Opal/Vectra.
+    Returns "" if tifffile isn't available or reading fails.
+    """
+    try:
+        import tifffile  # type: ignore
+    except Exception:
+        return ""
+
+    texts: List[str] = []
+    try:
+        with tifffile.TiffFile(str(tif_path)) as tif:
+            # pull a handful of common text-bearing tags from first few pages
+            for page in list(tif.pages)[: min(3, len(tif.pages))]:
+                for tagname in ("ImageDescription", "Software", "Artist", "HostComputer"):
+                    tag = page.tags.get(tagname)
+                    if tag is not None:
+                        val = getattr(tag, "value", None)
+                        if val:
+                            texts.append(str(val))
+
+            # ImageJ metadata (dict-like)
+            try:
+                md = tif.imagej_metadata
+                if md:
+                    texts.append(str(md))
+            except Exception:
+                pass
+
+            # OME XML
+            try:
+                ome = tif.ome_metadata
+                if ome:
+                    texts.append(str(ome))
+            except Exception:
+                pass
+    except Exception:
+        return ""
+
+    return "\n".join(texts)
+
+
+# -------------------------
+# Runner discovery
+# -------------------------
+def find_runner(
+    use_keep_brightest: bool,
+    runner_dir: Optional[Path] = None,
+) -> Path:
+    """
+    Locate the runner script file.
+    Searches common locations relative to this script, CWD, and optional runner_dir.
+    """
+    keep_names = ["keep_the_brightest.py", "keep_the_brigtest.py"]
+    sig_names = ["signal_based.py", "singal_based.py"]
+
+    names = keep_names if use_keep_brightest else sig_names
+
+    script_dir = Path(__file__).resolve().parent
+    cwd = Path.cwd()
+
+    roots: List[Path] = []
+    if runner_dir is not None:
+        roots.append(runner_dir)
+
+    roots += [script_dir, cwd]
+
+    # expand likely subdirs
+    expanded: List[Path] = []
+    for r in roots:
+        expanded.append(r)
+        expanded.append(r / "Debleed")
+        expanded.append(r / "bin")
+        expanded.append(r / "Debleed" / "bin")
+
+    for root in expanded:
+        for nm in names:
+            p = root / nm
+            if p.exists() and p.is_file():
+                return p
+
+    which = "keep-the-brightest" if use_keep_brightest else "signal-based"
+    raise FileNotFoundError(
+        f"Could not find a {which} runner script.\n"
+        f"Searched for: {', '.join(names)}\n"
+        f"In: {', '.join(str(p) for p in expanded)}\n"
+        f"\nFix: put the runner script next to debleed.py (or in ./bin or ./Debleed/)."
+    )
+
+
+# -------------------------
+# Output discovery
+# -------------------------
+def expected_output_candidates(stack_path: Path, channel: int) -> List[Path]:
+    """
+    Generate a few reasonable guesses for the output file name(s).
+    Underlying scripts may name output based on slicing off '.tif' or via splitext.
+    """
+    base_no_ext = stack_path.with_suffix("")  # handles .tif/.tiff nicely
+    cands: List[Path] = []
+
+    # Most reasonable
+    cands.append(Path(f"{base_no_ext}_Channel_{channel}_debleed.tif"))
+
+    # Plugin-style (img_path[:-4]) can behave oddly for .tiff, but include just in case
+    s = str(stack_path)
+    if len(s) > 4:
+        cands.append(Path(f"{s[:-4]}_Channel_{channel}_debleed.tif"))
+
+    # Glob fallback pattern
+    # We'll search after the run if needed.
+    return cands
+
+
+def locate_output(stack_path: Path, channel: int) -> Optional[Path]:
+    """
+    Locate the generated output file for a channel.
+    """
+    for p in expected_output_candidates(stack_path, channel):
+        if p.exists():
+            return p
+
+    # glob fallback: anything like *_Channel_<ch>_debleed.tif next to the input
+    base_no_ext = stack_path.with_suffix("")
+    pattern = f"{base_no_ext}_Channel_{channel}_debleed.tif*"
+    matches = sorted(glob.glob(pattern))
+    for m in matches:
+        mp = Path(m)
+        if mp.exists():
+            return mp
+
+    # broader fallback (in case base naming differs slightly)
+    pattern2 = str(stack_path.parent / f"*Channel_{channel}_debleed.tif*")
+    matches2 = sorted(glob.glob(pattern2))
+    for m in matches2:
+        mp = Path(m)
+        if mp.exists():
+            return mp
+
+    return None
+
+
+# -------------------------
+# Main
+# -------------------------
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="debleed.py",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description=(
+            "Terminal Debleed runner wrapper (cluster-friendly).\n\n"
+            "Examples:\n"
+            "  python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21\n"
+            "  python debleed.py IMC_smallcrop/IMC_smallcrop.tif 1,3-5 --patsize 16\n"
+            "  python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 --signal_based\n"
+        ),
+    )
+    ap.add_argument("stack_tif", type=str, help="Path to the TIFF stack (IMC/IF stack).")
+    ap.add_argument(
+        "channels",
+        nargs="?",
+        default="all",
+        help="Channel(s) to process: e.g. 21 or 1,3-5 or all (1-indexed). Default: all",
+    )
+    ap.add_argument(
+        "-p",
+        "--patsize",
+        type=int,
+        default=16,
+        help="Patch size (EVEN integer >= 4). Default: 16",
+    )
+    ap.add_argument(
+        "--ignore_overexposed",
+        action="store_true",
+        help="Pass through: ignore overexposed pixels (set saturated to 0).",
+    )
+
+    # Your requested misspelling + correct spelling
+    ap.add_argument(
+        "--signal_based",
+        "--singal_based",
+        dest="signal_based",
+        action="store_true",
+        help="Use the signal-based runner (recommended for Opal/Vectra).",
+    )
+
+    ap.add_argument(
+        "--runner_dir",
+        type=str,
+        default=None,
+        help="Optional directory to search first for runner scripts.",
+    )
+    ap.add_argument(
+        "--python",
+        type=str,
+        default=None,
+        help="Python executable to use for runner subprocesses (default: current interpreter).",
+    )
+    ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Stream runner stdout/stderr to console (useful for debugging).",
+    )
+
+    args = ap.parse_args(argv)
+
+    stack_path = Path(args.stack_tif).expanduser().resolve()
+    if not stack_path.exists():
+        print(f"[ERROR] Input TIFF not found: {stack_path}", file=sys.stderr)
+        return 2
+
+    patsize = int(args.patsize)
+    if patsize < 4 or (patsize % 2 != 0):
+        print(
+            f"[ERROR] Invalid --patsize {patsize}. Must be an EVEN integer >= 4.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Determine channels (for 'all' we need n_ch)
+    n_ch = infer_n_channels(stack_path)
+    try:
+        channels = parse_channels(args.channels, max_ch=n_ch)
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        return 2
+
+    # Validate range if we know n_ch
+    if n_ch is not None:
+        bad = [c for c in channels if not (1 <= c <= n_ch)]
+        if bad:
+            print(
+                f"[ERROR] Channel(s) out of range. Got {bad}; valid range is 1..{n_ch}.",
+                file=sys.stderr,
+            )
+            return 2
+
+    # Matrix check (recommended)
+    matrix_path = stack_path.with_suffix(".csv")
+    if not matrix_path.exists():
+        print(
+            f"[WARN] No co-expression/veto matrix found at: {matrix_path}\n"
+            f"       Debleeding will still run, but IMC results are usually better with a matrix.",
+            file=sys.stderr,
+        )
+
+    # Choose runner script
+    use_keep_brightest = not args.signal_based
+    runner_dir = Path(args.runner_dir).expanduser().resolve() if args.runner_dir else None
+    try:
+        runner_script = find_runner(use_keep_brightest=use_keep_brightest, runner_dir=runner_dir)
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        return 2
+
+    # Opal/Vectra warning if keep-brightest is selected
+    if use_keep_brightest:
+        meta_text = collect_metadata_text(stack_path)
+        if meta_text and re.search(r"\b(opal|vectra)\b", meta_text, flags=re.IGNORECASE):
+            print(
+                "[WARN] Detected 'Opal'/'Vectra' in TIFF metadata.\n"
+                "       The keep-the-brightest heuristic can be too aggressive for Opal/Vectra.\n"
+                "       Recommended: re-run with --signal_based (or --singal_based).\n",
+                file=sys.stderr,
+            )
+
+    pyexe = args.python or sys.executable
+
+    # Run per channel
+    total = len(channels)
+    t0 = time.time()
+    outputs: List[Tuple[int, Path]] = []
+
+    for i, ch in enumerate(channels, start=1):
+        pct = int(round(100.0 * i / float(total))) if total else 100
+        print(f"[{i} / {total} ({pct}%)] Processing channel {ch} ...", flush=True)
+
+        cmd = [
+            pyexe,
+            str(runner_script),
+            str(stack_path),
+            str(ch),
+            "--patsize",
+            str(patsize),
+        ]
+        if args.ignore_overexposed:
+            cmd.append("--ignore_overexposed")
+
+        if args.verbose:
+            print(f"  Running: {shlex.join(cmd)}", flush=True)
+            proc = subprocess.run(cmd)
+        else:
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+
+        if proc.returncode != 0:
+            print(f"[ERROR] Runner failed for channel {ch} (exit {proc.returncode}).", file=sys.stderr)
+            if not args.verbose:
+                if proc.stdout:
+                    print("----- stdout -----", file=sys.stderr)
+                    print(proc.stdout, file=sys.stderr)
+                if proc.stderr:
+                    print("----- stderr -----", file=sys.stderr)
+                    print(proc.stderr, file=sys.stderr)
+            return proc.returncode
+
+        out_path = locate_output(stack_path, ch)
+        if out_path is None or not out_path.exists():
+            print(
+                f"[ERROR] Could not find expected output for channel {ch} after runner completed.\n"
+                f"        Looked for something like: {stack_path.with_suffix('')}_Channel_{ch}_debleed.tif",
+                file=sys.stderr,
+            )
+            return 3
+
+        outputs.append((ch, out_path))
+        print(f"  -> Output: {out_path}", flush=True)
+
+    elapsed = time.time() - t0
+    mm = int(elapsed // 60)
+    ss = int(elapsed % 60)
+    print(f"\nDone. Processed {total} channel(s) in {mm:02d}:{ss:02d}.", flush=True)
+
+    return 0
 
 
 if __name__ == "__main__":
-    
+    raise SystemExit(main())
 
-    
-    functions = [lambda x: x, lambda x: np.rot90(x), lambda x: np.rot90(np.rot90(x)), lambda x: np.rot90(np.rot90(np.rot90(x))), lambda x: np.flipud(x), lambda x: np.fliplr(x), lambda x: np.rot90(np.fliplr(x)), lambda x: np.fliplr(np.rot90(x))]
-    ifunctions = [lambda x: x, lambda x: np.rot90(x,-1), lambda x: np.rot90(np.rot90(x,-1),-1), lambda x: np.rot90(np.rot90(np.rot90(x,-1),-1),-1), lambda x: np.flipud(x), lambda x: np.fliplr(x), lambda x: np.rot90(np.fliplr(x)), lambda x: np.fliplr(np.rot90(x))]
-        
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    FLOAT32_MAX = 3.402823466E+38
-    FLOAT32_MAX_SQRT = np.sqrt(3.402823466E+38)
-    FLOAT32_MAX_4RT = np.sqrt(np.sqrt(3.402823466E+38))
-    FLOAT32_MAX_8RT = np.sqrt(np.sqrt(np.sqrt(3.402823466E+38)))
-    FLOAT32_MAX_16RT = np.sqrt(FLOAT32_MAX_8RT)
-    FLOAT32_MAX_32RT = np.sqrt(FLOAT32_MAX_16RT)
-    
-    FLOAT32_MIN = 1.175494351E-38
-    patsize = 16
-    patsize = np.int32(patsize)
-    
-    varkern = torch.from_numpy(np.array([[0,1,0],[1,-4,1],[0,1,0]]))
-    
-        
-    #ParticalConv2D is copied from https://github.com/JinYize/self2self_pytorch, which is based on https://github.com/NVIDIA/partialconv
-    class PartialConv2d(nn.Conv2d):
-        def __init__(self, *args, **kwargs):
-
-            # whether the mask is multi-channel or not
-            if 'multi_channel' in kwargs:
-                self.multi_channel = kwargs['multi_channel']
-                kwargs.pop('multi_channel')
-            else:
-                self.multi_channel = False  
-
-            if 'return_mask' in kwargs:
-                self.return_mask = kwargs['return_mask']
-                kwargs.pop('return_mask')
-            else:
-                self.return_mask = False
-
-            #####Yize's fixes
-            self.multi_channel = True
-            self.return_mask = True
-            
-            super(PartialConv2d, self).__init__(*args, **kwargs)
-
-            if self.multi_channel:
-                self.weight_maskUpdater = torch.ones(self.out_channels, self.in_channels, self.kernel_size[0], self.kernel_size[1])
-            else:
-                self.weight_maskUpdater = torch.ones(1, 1, self.kernel_size[0], self.kernel_size[1])
-                
-            self.slide_winsize = self.weight_maskUpdater.shape[1] * self.weight_maskUpdater.shape[2] * self.weight_maskUpdater.shape[3]
-
-            self.last_size = (None, None, None, None)
-            self.update_mask = None
-            self.mask_ratio = None
-
-        def forward(self, input, mask_in=None):
-            assert len(input.shape) == 4
-            if mask_in is not None or self.last_size != tuple(input.shape):
-                self.last_size = tuple(input.shape)
-
-                with torch.no_grad():
-                    if self.weight_maskUpdater.type() != input.type():
-                        self.weight_maskUpdater = self.weight_maskUpdater.to(input)
-
-                    if mask_in is None:
-                        # if mask is not provided, create a mask
-                        if self.multi_channel:
-                            mask = torch.ones(input.data.shape[0], input.data.shape[1], input.data.shape[2], input.data.shape[3]).to(input)
-                        else:
-                            mask = torch.ones(1, 1, input.data.shape[2], input.data.shape[3]).to(input)
-                    else:
-                        mask = mask_in
-                            
-                    self.update_mask = F.conv2d(mask, self.weight_maskUpdater, bias=None, stride=self.stride, padding=self.padding, dilation=self.dilation, groups=1)
-
-                    # for mixed precision training, change 1e-8 to 1e-6
-                    self.mask_ratio = self.slide_winsize/(self.update_mask + 1e-8)
-                    # self.mask_ratio = torch.max(self.update_mask)/(self.update_mask + 1e-8)
-                    self.update_mask = torch.clamp(self.update_mask, 0, 1)
-                    self.mask_ratio = torch.mul(self.mask_ratio, self.update_mask)
-
-
-            raw_out = super(PartialConv2d, self).forward(torch.mul(input, mask) if mask_in is not None else input)
-
-            if self.bias is not None:
-                bias_view = self.bias.view(1, self.out_channels, 1, 1)
-                output = torch.mul(raw_out - bias_view, self.mask_ratio) + bias_view
-                output = torch.mul(output, self.update_mask)
-            else:
-                output = torch.mul(raw_out, self.mask_ratio)
-
-
-            if self.return_mask:
-                return output, self.update_mask
-            else:
-                return output
-
-
-    class TwoCon(nn.Module):
-    
-        def __init__(self, in_channels, out_channels):
-            super().__init__()
-            self.conv1 = PartialConv2d(in_channels, out_channels, kernel_size = 3, padding = 1)
-            self.conv2 = PartialConv2d(out_channels, out_channels, kernel_size = 3, padding = 1)
-            self.nonlinear1 = nn.LeakyReLU(0.1)
-            self.nonlinear2 = nn.LeakyReLU(0.1)
-    
-        def forward(self, x, maskeroo):
-            x, maskeroo = self.conv1(x, maskeroo)
-            x = self.nonlinear1(x)
-            x, maskeroo = self.conv2(x, maskeroo)
-            x = self.nonlinear2(x)
-            return x, maskeroo
-    
-    
-    class Net(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.conv1 = TwoCon(1, 48)
-            self.conv2 = TwoCon(48, 48)
-            self.conv3 = TwoCon(48, 48)
-            self.conv4 = TwoCon(48, 48)  
-            self.conv5 = TwoCon(48, 48) 
-            self.conv7 = TwoCon(48, 48) 
-            self.conv6 = nn.Conv2d(48,1,1)
-            
-    
-        def forward(self, x, maskero):
-            x, maskero = self.conv1(x,maskero)
-            x, maskero = self.conv2(x,maskero)
-            x, maskero = self.conv3(x, maskero)
-            x, maskero = self.conv4(x, maskero)
-            x, maskero = self.conv5(x, maskero)
-            x, maskero = self.conv7(x, maskero)
-            x = self.conv6(x)
-            return x
-        
-
-    file_name =  sys.argv[1]
-    filenoext = os.path.splitext(file_name)[0]
-
-    start_time = time.time()
-    print(file_name)
-    
-    inp = imread(file_name)
-    
-
-    if inp.shape[-1] == 3:
-        inp = np.swapaxes(inp, -2, -1)
-        inp = np.swapaxes(inp, -3, -2)
-    ogshape = inp.shape
-    
-    inp = inp.reshape(-1,ogshape[-2],ogshape[-1])
-    
-    typer = type(inp[0,0,0])
-    
-    inpnorm = inp.copy().astype(np.float32)
-    
-    out = inpnorm.copy()
-
-    inpnorm = torch.from_numpy(inpnorm)
-    
-    
-    path_file_name = Path(file_name)
-
-    oz = int(sys.argv[2]) - 1
-
-    start_time = time.time()
-    
-    base2d = torch.clone(inpnorm[oz,:,:])
-
-    compare3d = torch.clone(inpnorm)
-    
-
-        
-
-    
-    ogshapo = base2d.shape
-    
-    
-    
-    
-    
-    with torch.no_grad():
-    
-        if len(base2d.shape) == 2:
-            base2d =  torch.unsqueeze(base2d,0)
-        base2d =  torch.unsqueeze(base2d,0)
-        
-        if len(compare3d.shape) == 2:
-            compare3d =  torch.unsqueeze(compare3d,0)
-        compare3d =  torch.unsqueeze(compare3d,0)
-        
-        curcomp = torch.clone(compare3d[:,oz:oz+1,:,:])
-        
-        try:
-            matrix = pd.read_csv(file_name.split('.')[0]+'.csv',index_col=0).fillna(1)
-            cur_rwo = matrix.iloc[oz]
-            included = np.where(cur_rwo == 1)
-            compare3d = compare3d[:,included[0],:,:]
-        except:
-            print('No matrix found, using all channels for bleed through removal.')
-
-        
-        dummy = torch.ones_like(base2d)
-        
-    
-        
-        
-        unfold = nn.Unfold(kernel_size=(patsize+4, patsize+4))
-        RP = nn.ReflectionPad2d((2, 2, 2, 2))
-        base2d = RP(base2d)
-        dummy = RP(dummy)
-        
-        
-        rflef = torch.zeros_like(base2d)
-        rflef[0,0,2:-2,1] = 2
-        rflef[0,0,2:-2,2] = 1
-        rfrit = torch.zeros_like(base2d)
-        rfrit[0,0,2:-2,-2] = 2
-        rfrit[0,0,2:-2,-3] = 1
-        rftop = torch.zeros_like(base2d)
-        rftop[0,0,1,2:-2] = 2
-        rftop[0,0,2,2:-2] = 1
-        rfbot = torch.zeros_like(base2d)
-        rfbot[0,0,-2,2:-2] = 2
-        rfbot[0,0,-3,2:-2] = 1
-        
-        
-    
-        
-        evens = torch.zeros((patsize+4,patsize+4))
-        odds = torch.zeros((patsize+4,patsize+4))
-        
-        for i in range(1,evens.shape[0]-1):
-            for j in range(1,evens.shape[1]-1):
-                if i == 1 or i == (evens.shape[0]-2) or j == 1 or j == (evens.shape[1]-2):
-                    if (i + j) % 2 == 0:
-                        evens[i,j] = 1
-                    else:
-                        odds[i,j] = 1
-                else:
-                    continue
-        rf = torch.cat([rflef,rfrit,rftop,rfbot],axis=0)
-        base2d = unfold(base2d)
-        dummy = unfold(dummy)
-        rf = unfold(rf)
-        
-        
-    
-        
-        odds = torch.where(odds>0)
-        evens = torch.where(evens>0)
-    
-    
-        
-        base2d = base2d.view(-1,patsize+4,patsize+4,base2d.shape[-1])
-        dummy = dummy.view(-1,patsize+4,patsize+4,base2d.shape[-1])
-        rf = rf.view(-1,patsize+4,patsize+4,base2d.shape[-1])
-        dom2d = torch.clone(base2d)
-    
-        temp = torch.clone(rf[0,2:-2,1:-1,:])
-        rf[0,:,:,:] = 0*rf[0,:,:,:]
-        rf[0,2:-2,1:-1,:] = torch.clone(temp)
-    
-        temp = torch.clone(rf[1,2:-2,1:-1,:])
-        rf[1,:,:,:] = 0*rf[1,:,:,:]
-        rf[1,2:-2,1:-1,:] = torch.clone(temp)
-    
-        temp = torch.clone(rf[2,1:-1,2:-2,:])
-        rf[2,:,:,:] = 0*rf[2,:,:,:]
-        rf[2,1:-1,2:-2,:] = torch.clone(temp)
-        
-        temp = torch.clone(rf[3,1:-1,2:-2,:])
-        rf[3,:,:,:] = 0*rf[3,:,:,:]
-        rf[3,1:-1,2:-2,:] = torch.clone(temp)
-        
-        top = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        bot = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        lef = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        rit = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        toplef = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        toprit = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        botlef = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        botrit = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        cn = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        
-    
-        bord = torch.zeros((patsize+4,patsize+4,patsize+4,patsize+4))
-        
-    
-        
-        
-        for ka in range(1,top.shape[0]-1):
-            for kb in range(1,top.shape[1]-1):
-                top[ka,kb,ka-1,kb] = 1
-                bot[ka,kb,ka+1,kb] = 1
-                lef[ka,kb,ka,kb-1] = 1
-                rit[ka,kb,ka,kb+1] = 1
-                toplef[ka,kb,ka-1,kb-1] = 1
-                toprit[ka,kb,ka-1,kb+1] = 1
-                botlef[ka,kb,ka+1,kb-1] = 1
-                botrit[ka,kb,ka+1,kb+1] = 1
-                cn[ka,kb,ka,kb] = 1
-                if ka == 1 or ka == (top.shape[0]-2) or kb == 1 or kb == (top.shape[1]-2):
-                    if (ka + kb) % 2 == 0:
-                        bord[ka,kb][odds] = 1
-                    else:
-                        bord[ka,kb][evens] = 1
-                if ka == 1:
-                    bord[ka,kb,ka+1,kb] = 1
-                if kb == 1:
-                    bord[ka,kb,ka,kb+1] = 1
-                if ka == (top.shape[0]-2):
-                    bord[ka,kb,ka-1,kb] = 1
-                if kb == (top.shape[1]-2):
-                    bord[ka,kb,ka,kb-1] = 1
-                
-        
-        top = torch.where(top==1)
-        bot = torch.where(bot==1)
-        lef = torch.where(lef==1)
-        rit = torch.where(rit==1)
-        toplef = torch.where(toplef==1)
-        toprit = torch.where(toprit==1)
-        botlef = torch.where(botlef==1)
-        botrit = torch.where(botrit==1)
-        cn = torch.where(cn==1)
-        bord = torch.where(bord==1)
-        
-        
-        
-    
-        for hj in range(base2d.shape[-1]):
-            curpat = torch.clone(base2d[0,:,:,hj])
-            
-            
-            curpat = curpat.repeat(patsize+4,patsize+4,1,1)
-            
-        
-            
-            
-            curcost = torch.zeros_like(curpat)
-            
-            curcost[top] = torch.abs((curpat[toprit] - curpat[rit])) + FLOAT32_MIN
-            curcost[bot] = torch.abs((curpat[botlef] - curpat[lef])) + FLOAT32_MIN
-            curcost[lef] = torch.abs((curpat[toplef] - curpat[top])) + FLOAT32_MIN
-            curcost[rit] = torch.abs((curpat[botrit] - curpat[bot])) + FLOAT32_MIN
-            
-            if 1 == 1:
-            
-                totcost = np.stack([curcost[top],curcost[bot],curcost[lef],curcost[rit]])
-                sort = np.argsort(totcost,axis=0)
-                maxcost = sort[3]
-                mincost = sort[0]
-                ndcost = sort[1]
-                rdcost = sort[2]
-                
-                
-                
-        
-                
-                topmax = np.zeros_like(maxcost)
-                botmax = np.zeros_like(maxcost)
-                lefmax = np.zeros_like(maxcost)
-                ritmax = np.zeros_like(maxcost)
-                
-                topmin = np.zeros_like(mincost)
-                botmin = np.zeros_like(mincost)
-                lefmin = np.zeros_like(mincost)
-                ritmin = np.zeros_like(mincost)
-                
-                topnd = np.zeros_like(ndcost)
-                botnd = np.zeros_like(ndcost)
-                lefnd = np.zeros_like(ndcost)
-                ritnd = np.zeros_like(ndcost)
-                
-                toprd = np.zeros_like(rdcost)
-                botrd = np.zeros_like(rdcost)
-                lefrd = np.zeros_like(rdcost)
-                ritrd = np.zeros_like(rdcost)
-
-                topmax[maxcost==0] = FLOAT32_MAX_8RT
-                botmax[maxcost==1] = FLOAT32_MAX_8RT
-                lefmax[maxcost==2] = FLOAT32_MAX_8RT
-                ritmax[maxcost==3] = FLOAT32_MAX_8RT
-                
-                topmin[mincost==0] = 1
-                botmin[mincost==1] = 1
-                lefmin[mincost==2] = 1
-                ritmin[mincost==3] = 1
-                
-
-                topnd[ndcost==0] = 1
-                botnd[ndcost==1] = 1
-                lefnd[ndcost==2] = 1
-                ritnd[ndcost==3] = 1
-                
-                toprd[rdcost==0] = 1
-                botrd[rdcost==1] = 1
-                lefrd[rdcost==2] = 1
-                ritrd[rdcost==3] = 1
-                
-                curcost[top] = 0
-                curcost[bot] = 0
-                curcost[lef] = 0
-                curcost[rit] = 0
-                
-                
-                curcost[top] += torch.from_numpy(topmax).float()
-                curcost[bot] += torch.from_numpy(botmax).float()
-                curcost[lef] += torch.from_numpy(lefmax).float()
-                curcost[rit] += torch.from_numpy(ritmax).float()
-                
-                curcost[top] += torch.from_numpy(topmin).float()
-                curcost[bot] += torch.from_numpy(botmin).float()
-                curcost[lef] += torch.from_numpy(lefmin).float()
-                curcost[rit] += torch.from_numpy(ritmin).float()
-                
-                curcost[top] += torch.from_numpy(topnd).float()
-                curcost[bot] += torch.from_numpy(botnd).float()
-                curcost[lef] += torch.from_numpy(lefnd).float()
-                curcost[rit] += torch.from_numpy(ritnd).float()
-                
-                curcost[top] += torch.from_numpy(toprd).float()
-                curcost[bot] += torch.from_numpy(botrd).float()
-                curcost[lef] += torch.from_numpy(lefrd).float()
-                curcost[rit] += torch.from_numpy(ritrd).float()
-                
-                curcost[top] += (np.random.rand(curcost[top].shape[0])/10).astype(np.float32)
-                curcost[bot] += (np.random.rand(curcost[bot].shape[0])/10).astype(np.float32)
-                curcost[lef] += (np.random.rand(curcost[lef].shape[0])/10).astype(np.float32)
-                curcost[rit] += (np.random.rand(curcost[rit].shape[0])/10).astype(np.float32)
-
-            
-            curcost[bord] = FLOAT32_MAX_4RT
-            
-            rl1 = rf[0,:,:,hj]==2
-            rr1 = rf[1,:,:,hj]==2
-            rt1 = rf[2,:,:,hj]==2
-            rb1 = rf[3,:,:,hj]==2
-            
-            if torch.sum(rl1)>0:
-                curcost[rf[0,:,:,hj]==1,rl1] = FLOAT32_MAX_SQRT
-            if torch.sum(rr1)>0: 
-                curcost[rf[1,:,:,hj]==1,rr1] = FLOAT32_MAX_SQRT
-            if torch.sum(rt1)>0: 
-                curcost[rf[2,:,:,hj]==1,rt1] = FLOAT32_MAX_SQRT
-            if torch.sum(rb1)>0: 
-                curcost[rf[3,:,:,hj]==1, rb1] = FLOAT32_MAX_SQRT
-            
-    
-            curcost = curcost[1:-1,1:-1,1:-1,1:-1]
-            curpat = curpat[1:-1,1:-1,1:-1,1:-1]
-            
-            
-            
-            curcost = curcost.reshape(curcost.shape[0]*curcost.shape[1],-1).cpu().detach().numpy()
-            curpat = curpat.reshape(curpat.shape[0]*curpat.shape[1],-1).cpu().detach().numpy()
-            
-            
-            curcost[curcost==0] = FLOAT32_MAX
-
-            
-            row_ind, col_ind = linear_sum_assignment(curcost)
-            
-            
-            
-            curpat = curpat[0,:]
-            newpat = curpat.copy()
-            newpat[row_ind] = curpat[col_ind]
-            newpat = torch.from_numpy(newpat).view(patsize+2,patsize+2)
-            
-    
-            
-    
-            dom2d[0,1:-1,1:-1,hj] = torch.clone(newpat)
-        
-        base2d = base2d[:,2:-2,2:-2,:]
-        dom2d = dom2d[:,2:-2,2:-2,:]
-        dummy = dummy[:,2:-2,2:-2,:]
-        rf = rf[:,2:-2,2:-2,:]
-
-
-        
-        
-        
-        
-
-        
-        rf = rf[:,1:-1,1:-1,:]
-        rfdom = torch.clone(rf)
-        
-
-        rf[0,:,:,:] = base2d[0,2:,1:-1,:]
-        rf[1,:,:,:]  = base2d[0,:-2,1:-1,:]
-        rf[2,:,:,:] = base2d[0,1:-1,2:,:]
-        rf[3,:,:,:]  = base2d[0,1:-1,:-2,:]
-        
-        rfdom[0,:,:,:] = dom2d[0,2:,1:-1,:]
-        rfdom[1,:,:,:]  = dom2d[0,:-2,1:-1,:]
-        rfdom[2,:,:,:] = dom2d[0,1:-1,2:,:]
-        rfdom[3,:,:,:]  = dom2d[0,1:-1,:-2,:]
-
-    
-        
-        rf = rf.reshape(rf.shape[0],-1,rf.shape[-1])
-        rf = torch.abs(rf[0,:,:] - rf[1,:,:]) + torch.abs(rf[0,:,:] - rf[2,:,:])  + torch.abs(rf[0,:,:] - rf[3,:,:]) + torch.abs(rf[1,:,:] - rf[2,:,:]) + torch.abs(rf[1,:,:] - rf[3,:,:]) + torch.abs(rf[2,:,:] - rf[3,:,:])
-        rfmean = torch.mean(rf, axis=0).unsqueeze(0)
-        rfmean[rfmean==0] = 1
-        rf = rf/rfmean
-        
-        
-        rfdom = rfdom.reshape(rfdom.shape[0],-1,rfdom.shape[-1])
-        rfdomstd = torch.abs(rfdom[0,:,:] - rfdom[1,:,:]) + torch.abs(rfdom[0,:,:] - rfdom[2,:,:])  + torch.abs(rfdom[0,:,:] - rfdom[3,:,:]) + torch.abs(rfdom[1,:,:] - rfdom[2,:,:]) + torch.abs(rfdom[1,:,:] - rfdom[3,:,:]) + torch.abs(rfdom[2,:,:] - rfdom[3,:,:])
-        rfdommean = torch.mean(rfdomstd, axis=0).unsqueeze(0)
-        rfdommean[rfdommean==0] = 1
-        rfdomstd = rfdomstd/rfdommean
-        
-        
-        basediff = torch.abs(rf - rfdomstd)
-        
-        
-        basediff = torch.sum(basediff, axis=0)
-
-        
-        
-        
-        base2d = base2d.reshape(base2d.shape[0],-1,base2d.shape[-1])
-        dom2d = dom2d.reshape(dom2d.shape[0],-1,dom2d.shape[-1])
-        dummy = dummy.reshape(dummy.shape[0],-1,dummy.shape[-1])
-        
-        
-        
-        trumeanbase = torch.mean(base2d,axis=1)
-        trumeanbase = trumeanbase.view(1,1,trumeanbase.shape[-1])
-        trumeanbase[trumeanbase==0] = FLOAT32_MIN
-
-        
-        
-        
-        #dom2d = 0*dom2d
-        #base2d = 0*base2d
-        
-        
-        base2d = 0*base2d
-        dom2d = 0*dom2d
-
-
-
-        #counts
-        
-        
-        curcomp = RP(curcomp)
-        curcomp = unfold(curcomp)
-        curcomp = curcomp.view(-1,patsize+4,patsize+4,curcomp.shape[-1])
-        curcomp = curcomp[:,2:-2,2:-2,:]
-        
-        
-        curcomp = curcomp.reshape(1,-1,curcomp.shape[-1])
-        
-        
-        
-        dom2d = torch.clone(curcomp)
-        
-        
-        for ow in range(compare3d.shape[1]):
-            
-            curcomp = compare3d[:,ow:ow+1,:,:]
-            curcomp = RP(curcomp)
-            curcomp = unfold(curcomp)
-            curcomp = curcomp.view(-1,patsize+4,patsize+4,curcomp.shape[-1])
-            curcomp = curcomp[:,2:-2,2:-2,:]
-            
-            rfdom = rfdom.view(4,int(np.sqrt(rfdom.shape[1])),int(np.sqrt(rfdom.shape[1])),-1).float()
-            rfdom[0,:,:,:] = curcomp[0,2:,1:-1,:]
-            rfdom[1,:,:,:]  = curcomp[0,:-2,1:-1,:]
-            rfdom[2,:,:,:] = curcomp[0,1:-1,2:,:]
-            rfdom[3,:,:,:]  = curcomp[0,1:-1,:-2,:]
-            
-  
-            
-            rfdom = rfdom.reshape(rfdom.shape[0],-1,rfdom.shape[-1])
-            rfdomstd = torch.abs(rfdom[0,:,:] - rfdom[1,:,:]) + torch.abs(rfdom[0,:,:] - rfdom[2,:,:])  + torch.abs(rfdom[0,:,:] - rfdom[3,:,:]) + torch.abs(rfdom[1,:,:] - rfdom[2,:,:]) + torch.abs(rfdom[1,:,:] - rfdom[3,:,:]) + torch.abs(rfdom[2,:,:] - rfdom[3,:,:])
-            rfdommean = torch.mean(rfdomstd, axis=0).unsqueeze(0)
-            rfdommean[rfdommean==0] = 1
-            rfdomstd = rfdomstd/rfdommean
-            
-            
-            compdiff = torch.abs(rf - rfdomstd)
-        
-
-            compdiff = torch.sum(compdiff, axis=0)
-        
-            
-        
-            
-            
-            
-            curcomp = curcomp.reshape(1,-1,curcomp.shape[-1])
-            
-            
-            
-            
-            trumeancomp = torch.mean(curcomp,axis=1)
-            trumeancomp = trumeancomp.view(1,1,trumeancomp.shape[-1])
-            trumeancomp[trumeancomp==0] = FLOAT32_MIN
-            
-            
-            
-            whurdif = torch.where((compdiff<basediff) & (trumeanbase[0,0,:]<trumeancomp[0,0,:]))[0]
-            
-            
-            
-            dom2d[:,:,whurdif] = dom2d[:,:,whurdif]*0
-
-            
-        
-        dom2d = dom2d
-        
-        
-        
-        fold = nn.Fold(output_size=(ogshapo[-2],ogshapo[-1]), kernel_size=(patsize, patsize))
-        
-        dom2d = fold(dom2d)
-        dummy = fold(dummy)
-        
-        dom2d = dom2d/dummy
-        
-        dom2d = np.clip(dom2d, np.min(inp[oz,:,:]), np.max(inp[oz,:,:]))
-        
-        
-    
-
-    notdone = True
-    learning_rate = 0.00005
-
-    img = dom2d[0,0,:,:].cpu().detach().numpy()
-    
-    
-
-            
-    imwrite(file_name[:-4] + '_Channel_'+str(oz+1)+'_debleed.tif', img, imagej=True)
-
-print("--- %s seconds ---" % (time.time() - start_time)) 
-torch.cuda.empty_cache()
