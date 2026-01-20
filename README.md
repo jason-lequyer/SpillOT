@@ -74,7 +74,7 @@ Click OK to start. A progress window shows elapsed time while each channel is pr
 
 ## Command-Line Use (Terminal / Cluster)
 
-This repository includes a **terminal-friendly** `debleed.py` wrapper that allows Debleed to be run outside Fiji on a workstation or compute cluster (e.g. SLURM). The script processes one or more channels from a TIFF stack and writes one output TIFF per processed channel.
+This repository includes a **terminal-friendly** `debleed.py` wrapper that allows Debleed to be run outside Fiji on a workstation or compute cluster (e.g. SLURM). The script processes one or more channels from a TIFF stack and writes one output TIFF per processed channel for optimal paralellization.
 
 ### Basic usage
 
