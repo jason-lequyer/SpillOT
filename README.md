@@ -109,27 +109,11 @@ To process **all channels** in the stack:
 ```bash
 python debleed.py <path/to/stack.tif> all
 ```
+### Optional arguments
 
-### Patch size
+#### Co-expression / Veto Matrix (Hightly recommended to use)
 
-Patch size can also be set as follows:
-
-```bash
-python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 --patsize 12
-# (also accepts: -p 12)
-```
-
-### Ignore overexposed pixels (optional)
-
-To set saturated pixels to zero before debleeding:
-
-```bash
-python debleed.py <path/to/stack.tif> 21 --ignore_overexposed
-```
-
-### Co-expression / Veto Matrix (Recommended for IMC)
-
-For best results on IMC data, you should provide a **veto (co-expression) matrix** specifying which channels should *not* be considered when debleeding a given target channel.
+You can provide a **veto (co-expression) matrix** specifying which channels should *not* be considered when debleeding a given target channel.
 
 - See `IMC_smallcrop_withcsv/IMC_smallcrop.csv` for an example.
 - The matrix must have the **same base name as the TIFF stack**, but with a `.csv` extension.
@@ -147,18 +131,33 @@ CSV format:
 Note:
 - Header names are not strictly required; the program assumes row/column order corresponds to TIFF channel order.
 - If names are included, ensure they match the TIFF channel ordering.
+#### Patch size
 
-### Opal / Vectra Data
+Patch size can also be set as follows:
 
-For Opal/Vectra multiplex IHC data, the keep-the-brightest heuristic can be suboptimal.
+```bash
+python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 --patsize 12
+# (also accepts: -p 12)
+```
 
-Recommended: use the signal-based route:
+#### Ignore overexposed pixels
+
+To set saturated pixels to zero before debleeding:
+
+```bash
+python debleed.py <path/to/stack.tif> 21 --ignore_overexposed
+```
+
+
+#### Opal / Vectra Data
+
+For Opal/Vectra multiplex IHC data, the keep-the-brightest heuristic can be suboptimal so we reccommend using the signal-based flag:
 
 ```bash
 python debleed.py <path/to/stack.tif> 21 --signal_based
 ```
 
-### Outputs
+#### Outputs
 
 For each processed channel `N`, the output is written next to the input TIFF stack and typically named:
 
