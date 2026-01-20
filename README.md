@@ -57,8 +57,10 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 5) Finally, it will ask you to enter some parameters:
    - Channel(s) to debleed, e.g. `1,3-5`.
-   - Patch size, must be an even integer greater than or equal to 4. Smaller patch size leads to more aggressive and faster debleeding. Default is 16.
+   - Patch size, must be an even integer greater than or equal to 4. Smaller patch size leads to more aggressive and faster debleeding. Default is 16, best results at 24.
    - Conda env path: the plugin tries to prefill the path to the rfot environment. If it is blank, paste the full path to your env. Examples are in the FAQ below.
+   - Keep the brightest heuristic: assumes brightest isntance of a signal is the true signal and calls anything dimmer bleed-through, if this assumption is invalid (which is commonly the case with Opal), turn off to have our brightness-invariant extrema based signal detection performed.
+   - Ignore overexposed pixels: any pixel hitting the pixel intensity limit of the image format (e.g. 4096 for 12-bit) will be set to zero before debleeding. Rarely needed.
 
 Click OK to start. A progress window shows elapsed time while each channel is processed.
 
@@ -70,46 +72,120 @@ Click OK to start. A progress window shows elapsed time while each channel is pr
 - The datatype matches your input. Outputs are ImageJ compatible TIFFs.
 
 
-## Command-Line Use
+## Command-Line Use (Terminal / Cluster)
 
-You can run the debleeder outside Fiji in the rfot environment. The debleeder expects a TIFF stack. If you have individual files per channel, use Fiji: File -> Import -> Image Sequence, then Image -> Stacks -> Images to Stack, then save as TIFF.
+This repository includes a **terminal-friendly** `debleed.py` wrapper that allows Debleed to be run outside Fiji on a workstation or compute cluster (e.g. SLURM). The script processes one or more channels from a TIFF stack and writes one output TIFF per processed channel.
 
-To run the debleeder in terminal create a folder in the master directory (the directory that contains debleed.py) and put your raw IMC images into it. Then open anaconda prompt/terminal and run the following:
+### Basic usage
 
-```python
+From the repository “master directory” (the directory containing `debleed.py`):
+
+```bash
 cd <masterdirectoryname>
 conda activate rfot
-python debleed.py <imcfolder>/<imcfilename> <channel_to_debleed>
+python debleed.py <path/to/stack.tif> <channel>
 ```
 
-Replacing "masterdirectoryname" with the full path to the directory that contains debleed.py. For example, to apply this to the 21st channel of the IMC_smallcrop data (using 1-indexing) included in this repository we would run:
+Example (debleed channel 21 of the included IMC test data):
 
-```python
+```bash
 cd <masterdirectoryname>
-conda activate RFOT
+conda activate rfot
 python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
+Channel indexing is **1-based** (so `21` means the 21st channel in the TIFF stack).
 
-For best results on IMC, you should supply a veto matrix of channels you do not want to be considered when debleeding the target channel. For format, see IMC_smallcrop_withcsv/IMC_smallcrop.csv. Essentially the columns and rows list each channel, and a 0 in (x,y) indicates that column x's channel will NOT be considered when debleeding the row y's channel. 
+### Multiple channels / all channels
 
-This might be done, for example if it is a prioi known which channels are suceptible to bleed through into other channels, or if it is known certain channels contain legitimately similar signal that is not the result of bleed through. Ultimately you should put as much information as is known into this matrix to achieve optimal image restoration. 
-
-The names of columns and rows in the .csv file is irrelevant and not read by the program, it will assume the fouth row corresponds to the fourth channel etc., so if you do name the columns and rows ensure they correspond to the order in which they appear in the tiff stack. The program automatically detects the presence of a veto matrix (just give it the same name as the target tiff file, but ending in .csv), so you can simply run:
-
+You can process multiple channels using comma-separated values and ranges:
 
 ```bash
-conda activate rfot
-python Debleed.py <path/to/stack.tif> [channel]
-python Debleed.py IMC_smallcrop/IMC_smallcrop.tif 21
+python debleed.py <path/to/stack.tif> 1,3-5
 ```
 
-You can also specifiy patch size using the -p argument, e.g to use patch size 12:
+To process **all channels** in the stack:
+
 ```bash
-conda activate rfot
-python Debleed.py <path/to/stack.tif> [channel]
-python Debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 -p 12
+python debleed.py <path/to/stack.tif> all
 ```
+
+### Patch size
+
+Patch size can also be set as follows:
+
+```bash
+python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21 --patsize 12
+# (also accepts: -p 12)
+```
+
+### Ignore overexposed pixels (optional)
+
+To set saturated pixels to zero before debleeding:
+
+```bash
+python debleed.py <path/to/stack.tif> 21 --ignore_overexposed
+```
+
+### Co-expression / Veto Matrix (Recommended for IMC)
+
+For best results on IMC data, you should provide a **veto (co-expression) matrix** specifying which channels should *not* be considered when debleeding a given target channel.
+
+- See `IMC_smallcrop_withcsv/IMC_smallcrop.csv` for an example.
+- The matrix must have the **same base name as the TIFF stack**, but with a `.csv` extension.
+
+Example:
+
+- TIFF stack: `IMC_smallcrop/IMC_smallcrop.tif`
+- Veto matrix: `IMC_smallcrop/IMC_smallcrop.csv`
+
+CSV format:
+- Rows and columns correspond to channels by their order in the TIFF stack
+- A `0` at position `(row = y, column = x)` means **channel x will NOT be used** when debleeding channel y
+- A `1` means it **will** be used
+
+Note:
+- Header names are not strictly required; the program assumes row/column order corresponds to TIFF channel order.
+- If names are included, ensure they match the TIFF channel ordering.
+
+### Opal / Vectra Data
+
+For Opal/Vectra multiplex IHC data, the keep-the-brightest heuristic can be suboptimal.
+
+Recommended: use the signal-based route:
+
+```bash
+python debleed.py <path/to/stack.tif> 21 --signal_based
+```
+
+### Outputs
+
+For each processed channel `N`, the output is written next to the input TIFF stack and typically named:
+
+```
+<stack_basename>_Channel_<N>_debleed.tif
+```
+
+Example:
+
+```
+IMC_smallcrop/IMC_smallcrop_Channel_21_debleed.tif
+```
+
+### Debugging tips
+
+To stream the underlying runner output and print the exact subprocess commands:
+
+```bash
+python debleed.py <path/to/stack.tif> 21 --verbose
+```
+
+If your runner scripts are stored in a non-standard location, you can specify it explicitly:
+
+```bash
+python debleed.py <path/to/stack.tif> 21 --runner_dir /path/to/Debleed/scripts
+```
+
 # Denoiser
 
 ## Multi-channel data
