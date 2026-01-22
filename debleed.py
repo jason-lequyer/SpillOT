@@ -1,22 +1,3 @@
-#!/usr/bin/env python3
-"""
-debleed.py — terminal/cluster wrapper for Debleed runners.
-
-Default behavior:
-  - Uses keep-the-brightest runner (keep_the_brightest.py / keep_the_brigtest.py)
-
-Optional:
-  - --signal_based / --singal_based switches to signal-based runner
-  - Channels can be a single int (e.g. 21), a range/list (e.g. "1,3-5"), or "all"
-  - --patsize sets patch size (EVEN integer >= 4)
-  - --ignore_overexposed passes through to the runner scripts
-
-Assumptions:
-  - keep_the_brightest.py or keep_the_brigtest.py exists (unaltered)
-  - signal_based.py or singal_based.py exists (unaltered)
-  - co-expression/veto matrix CSV exists as <stack_basename>.csv (recommended)
-"""
-
 from __future__ import annotations
 
 import argparse
