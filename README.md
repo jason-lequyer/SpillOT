@@ -46,17 +46,17 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 
 ## How to Run in Fiji
 
-1) Open your image in Fiji. TIFF stacks are recommended. RGB images are supported and will be split into 3 channels automatically.
+1) Open the image in Fiji as a TIFF stack where each slice corresponds to a single channel. To do this for Opal and some other proprietary formats, you may need to use Plugins → Bio-Formats → Bio-Formats Importer, tick Split channels on the popup menu and select the image series that contains the true channel-by-channel data.
 2) Run the plugin from the menu if visible:
    - Plugins -> Debleed -> Debleed_Run
    - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
-3) Now it will ask you to group co-expressing channels together:
+3) First it will ask you to select which channel(s) you want to debleed
+4) Then it will ask you to group co-expressing channels together:
    - This menu allows you to group co-expressing channels so they do not debleed each other. Use the matrix to exclude channels that share real signal, not bleed-through.
 
-   - The plugin proposes an initial auto-grouping using channel names and a built-in lookup table of known co-expressing channels in IMC. Review and adjust as needed. If it misses obvious pairs on correctly named channels, tell us which ones and we will update the lookup table.
+   - The plugin proposes an initial auto-grouping using channel names and a built-in lookup table of known co-expressing channels in IMC. Review and adjust as needed.
 
 5) Finally, it will ask you to enter some parameters:
-   - Channel(s) to debleed, e.g. `1,3-5`.
    - Patch size, must be an even integer greater than or equal to 4. Smaller patch size leads to more aggressive and faster debleeding. Default is 16, best results at 24.
    - Conda env path: the plugin tries to prefill the path to the rfot environment. If it is blank, paste the full path to your env. Examples are in the FAQ below.
    - Keep the brightest heuristic: assumes brightest isntance of a signal is the true signal and calls anything dimmer bleed-through, if this assumption is invalid (which is commonly the case with Opal), turn off to have our brightness-invariant extrema based signal detection performed.
