@@ -12,9 +12,6 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 
-# -------------------------
-# Channel parsing
-# -------------------------
 def parse_channels(spec: str, max_ch: Optional[int]) -> List[int]:
     """
     Parse channels spec into a sorted unique list of 1-indexed channel numbers.
@@ -54,9 +51,6 @@ def parse_channels(spec: str, max_ch: Optional[int]) -> List[int]:
     return out
 
 
-# -------------------------
-# TIFF helpers (optional)
-# -------------------------
 def infer_n_channels(tif_path: Path) -> Optional[int]:
     """
     Try to infer number of channels/pages in the TIFF stack.
@@ -133,9 +127,6 @@ def collect_metadata_text(tif_path: Path) -> str:
     return "\n".join(texts)
 
 
-# -------------------------
-# Runner discovery
-# -------------------------
 def find_runner(
     use_keep_brightest: bool,
     runner_dir: Optional[Path] = None,
@@ -181,9 +172,7 @@ def find_runner(
     )
 
 
-# -------------------------
-# Output discovery
-# -------------------------
+
 def expected_output_candidates(stack_path: Path, channel: int) -> List[Path]:
     """
     Generate a few reasonable guesses for the output file name(s).
@@ -233,9 +222,6 @@ def locate_output(stack_path: Path, channel: int) -> Optional[Path]:
     return None
 
 
-# -------------------------
-# Main
-# -------------------------
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="debleed.py",
