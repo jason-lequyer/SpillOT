@@ -1,16 +1,22 @@
 # Debleed runner (Fiji / Jython) with:
+# - Up-front NxN checkbox grid selection of which planes to debleed
+#        * N = ceil(sqrt(total_planes))
+#        * Thumbnails ALWAYS shown (autoscaled per plane)
+#        * NONE selected by default (no Select All / Select None buttons)
+#        * Uses available space: fewer planes => bigger thumbs/labels
+#        * LIVE recompute on dialog resize (debounced) so it stays perfect while dragging
+#        * Thumbnails occupy a higher % of dialog (tighter gaps/padding + reserve based on actual checkbox height)
 # - Co-expression groups UI & persistence via CSV
 # - Channel names prefer "Name #i = ..." from slice labels / metadata
-# - Auto-grouping: only create groups with >= 2 present channels (singletons only name-snap)
+# - Auto-grouping: only create groups with >= 2 present channels (plus selected singletons)
 # - "Add ->" adds to selected/right group, or last-used group if none selected
-# - Defaults to debleeding all channels
 # - Fixed progress text "i / N (XX%)"
 # - Prompts to save if image has unsaved changes, then debleeds saved file
 # - Extra co-expression rules for endothelial / immune / epithelial markers (+ your T-cell/nuclear)
-# - NEW: "Keep-the-brightest heuristic" checkbox (default ON)
+# - "Keep-the-brightest heuristic" checkbox (default ON)
 #        ON  -> run keep_the_brightest.py
 #        OFF -> run singal_based.py (also accepts signal_based.py)
-# - NEW: If "opal" or "vectra" appear in metadata and heuristic is ON, warn to turn it OFF
+# - If "opal" or "vectra" appear in metadata and heuristic is ON, warn to turn it OFF
 
 # ---------------------------------------------------------------------
 # Group rules (used only for initial auto-assignment when NO saved CSV)
@@ -55,16 +61,19 @@ groups_by_name = [
 # ---------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------
-import os, sys, itertools, tempfile, subprocess, re, time
+import os, sys, itertools, tempfile, subprocess, re, time, math
 from ij import IJ, ImagePlus, ImageStack
 from ij.gui import GenericDialog
 from ij.io import Opener, FileSaver
 from ij.plugin import ChannelSplitter
+
 from javax.swing import (JPanel, JScrollPane, JList, DefaultListModel,
-                         JButton, BoxLayout, JOptionPane, JLabel, JDialog, JProgressBar, Timer)
-from java.awt import (Dimension, Toolkit, BorderLayout, GraphicsEnvironment)
-from java.awt.event import ActionListener
-from java.lang import System as JSystem
+                         JButton, BoxLayout, JOptionPane, JLabel, JDialog, JProgressBar, Timer,
+                         JCheckBox, ImageIcon, BorderFactory, SwingConstants, SwingUtilities)
+from java.awt import (Dimension, Toolkit, BorderLayout, GraphicsEnvironment,
+                      GridLayout, FlowLayout, Insets)
+from java.awt.event import ActionListener, ComponentAdapter
+from java.lang import System as JSystem, Runnable
 
 paths = []
 
@@ -97,10 +106,12 @@ def _show_progress(total_channels):
     dlg.setSize(300, 100)
     dlg.setLocationRelativeTo(None)
     dlg.setVisible(True)
+
     class _Tick(ActionListener):
         def actionPerformed(self, evt):
             elapsed_lbl.setText("Elapsed: " + _fmt_elapsed(time.time() - start_ts))
             elapsed_lbl.repaint()
+
     t = Timer(1000, _Tick()); t.setRepeats(True); t.start()
     return dlg, bar, t
 
@@ -118,6 +129,7 @@ def _pb_smooth_to(bar, new_value, duration_ms=250):
     steps = max(1, int(duration_ms / 40))
     delta = float(new_value - start) / steps
     state = {"i": 0, "val": float(start)}
+
     class _Step(ActionListener):
         def actionPerformed(self, evt):
             state["i"] += 1
@@ -128,6 +140,7 @@ def _pb_smooth_to(bar, new_value, duration_ms=250):
                 bar.putClientProperty("pbTweenTimer", None); return
             state["val"] += delta
             bar.setValue(int(round(state["val"]))); bar.repaint()
+
     timer = Timer(int(round(float(duration_ms) / steps)), _Step())
     timer.setRepeats(True); timer.start()
     bar.putClientProperty("pbTweenTimer", timer)
@@ -297,6 +310,9 @@ def slice_idx(c):
     else:
         return imp.getStackIndex(1, 1, c)
 
+def _axis_label(axis_used):
+    return {"channels":"Channel", "slices":"Slice", "frames":"Frame"}.get(axis_used, "Channel")
+
 # ---------------------------------------------------------------------
 # Metadata helpers
 # ---------------------------------------------------------------------
@@ -415,6 +431,287 @@ def _canonicalize_names_via_rules(names, groups_by_name):
 names = _canonicalize_names_via_rules(names, groups_by_name)
 
 # ---------------------------------------------------------------------
+# Up-front selection UI helpers (thumbnails)
+# ---------------------------------------------------------------------
+def _make_thumb_icon_for_plane(imp, one_based_plane_idx, thumb_px=80):
+    try:
+        idx = slice_idx(one_based_plane_idx)
+        ip = imp.getStack().getProcessor(idx)
+        if ip is None:
+            return None
+
+        ip2 = ip.duplicate()
+
+        # Aspect-preserving resize: fit largest side to thumb_px
+        try:
+            sw = int(ip2.getWidth())
+            sh = int(ip2.getHeight())
+        except Exception:
+            sw, sh = (0, 0)
+
+        if sw > 0 and sh > 0:
+            scale = float(thumb_px) / float(max(sw, sh))
+            nw = max(1, int(round(sw * scale)))
+            nh = max(1, int(round(sh * scale)))
+        else:
+            nw = nh = int(thumb_px)
+
+        ip_small = ip2.resize(int(nw), int(nh))
+        try:
+            ip_small.resetMinAndMax()  # autoscale per plane
+        except Exception:
+            pass
+
+        try:
+            img = ip_small.createImage()
+        except Exception:
+            try:
+                img = ip_small.getBufferedImage()
+            except Exception:
+                return None
+
+        return ImageIcon(img)
+    except Exception:
+        return None
+
+def _select_planes_to_debleed(names, imp, axis_used):
+    label = _axis_label(axis_used)
+    n = len(names)
+    if n <= 0:
+        return None
+
+    ngrid = int(math.ceil(math.sqrt(float(n))))
+
+    # Tighter spacing => more area for thumbnails
+    GRID_GAP   = 3
+    OUTER_PAD  = 4
+    CELL_PAD   = 2
+    THUMB_STEP = 8       # quantize thumbs to multiples of 8px
+    THUMB_MIN  = 16
+    THUMB_MAX  = 1024    # safety cap
+
+    dlg = JDialog(None, "Select %ss to Debleed" % label, True)
+    dlg.setLayout(BorderLayout())
+
+    top = JPanel()
+    top.setLayout(BoxLayout(top, BoxLayout.Y_AXIS))
+    msg = ("<html><b>Select which %ss to debleed</b><br/>"
+           "<span style='font-size:9px;color:gray'>"
+           "Thumbnails are autoscaled per %s. Nothing is selected by default."
+           "</span></html>") % (label, label.lower())
+    top.add(JLabel(msg))
+
+    ctrl = JPanel(FlowLayout(FlowLayout.LEFT))
+    lbl_count = JLabel("Selected: 0 / %d" % n)
+    ctrl.add(lbl_count)
+    top.add(ctrl)
+    dlg.add(top, BorderLayout.NORTH)
+
+    # Checkboxes: NONE selected by default, compact single-line-ish label
+    cbs = []
+    for i, nm in enumerate(names, start=1):
+        html = "<html><center><b>%s</b> <span style='font-size:9px;color:gray'>(%d)</span></center></html>" % (nm, i)
+        cb = JCheckBox(html, False)
+        cb.setHorizontalAlignment(SwingConstants.CENTER)
+        cb.setToolTipText("%s %d: %s" % (label, i, nm))
+        try:
+            cb.setMargin(Insets(0, 0, 0, 0))
+        except Exception:
+            pass
+        try:
+            cb.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0))
+        except Exception:
+            pass
+        cbs.append(cb)
+
+    # Cache icons for the current thumb size only (clear when size changes)
+    icons_cache = {}
+    state = {"thumb_px": None}
+
+    grid = JPanel(GridLayout(ngrid, ngrid, GRID_GAP, GRID_GAP))
+    grid.setBorder(BorderFactory.createEmptyBorder(OUTER_PAD, OUTER_PAD, OUTER_PAD, OUTER_PAD))
+    dlg.add(grid, BorderLayout.CENTER)
+
+    def update_count():
+        sel = sum(1 for cb in cbs if cb.isSelected())
+        lbl_count.setText("Selected: %d / %d" % (sel, n))
+        lbl_count.repaint()
+
+    def _quantize(px):
+        px = int(px)
+        if px <= 0:
+            return THUMB_MIN
+        q = int(THUMB_STEP)
+        return max(THUMB_MIN, min(THUMB_MAX, q * int(round(float(px) / q))))
+
+    def _compute_thumb_px():
+        gw, gh = grid.getWidth(), grid.getHeight()
+        if gw <= 0 or gh <= 0:
+            gw = max(300, dlg.getWidth() - 40)
+            gh = max(200, dlg.getHeight() - 140)
+
+        try:
+            ins = grid.getInsets()
+            avail_w = max(1, gw - ins.left - ins.right)
+            avail_h = max(1, gh - ins.top  - ins.bottom)
+        except Exception:
+            avail_w, avail_h = gw, gh
+
+        cell_w = float(avail_w - (ngrid - 1) * GRID_GAP) / float(ngrid)
+        cell_h = float(avail_h - (ngrid - 1) * GRID_GAP) / float(ngrid)
+
+        # Reserve exactly what checkbox needs (preferred height), plus tiny safety pad
+        cb_h = 0
+        for cb in cbs:
+            try:
+                h = cb.getPreferredSize().height
+                if h > cb_h:
+                    cb_h = h
+            except Exception:
+                pass
+
+        reserve_h = cb_h + (CELL_PAD * 2) + 6
+
+        thumb_by_w = cell_w - (CELL_PAD * 2)
+        thumb_by_h = cell_h - reserve_h - (CELL_PAD * 2)
+
+        thumb = int(min(thumb_by_w, thumb_by_h))
+        thumb = max(THUMB_MIN, thumb)
+        return _quantize(thumb)
+
+    def _get_icon(i0, thumb_px):
+        if i0 not in icons_cache:
+            icons_cache[i0] = _make_thumb_icon_for_plane(imp, i0 + 1, thumb_px=thumb_px)
+        return icons_cache[i0]
+
+    def rebuild_grid():
+        thumb_px = _compute_thumb_px()
+        if state["thumb_px"] != thumb_px:
+            icons_cache.clear()
+            state["thumb_px"] = thumb_px
+
+        grid.removeAll()
+        total_cells = ngrid * ngrid
+
+        for cell_i in range(total_cells):
+            cell = JPanel()
+            cell.setLayout(BoxLayout(cell, BoxLayout.Y_AXIS))
+            cell.setBorder(BorderFactory.createEmptyBorder(CELL_PAD, CELL_PAD, CELL_PAD, CELL_PAD))
+
+            if cell_i < n:
+                icon = _get_icon(cell_i, thumb_px)
+                if icon is not None:
+                    lab = JLabel(icon)
+                    lab.setAlignmentX(0.5)
+                    cell.add(lab)
+
+                cb = cbs[cell_i]
+                cb.setAlignmentX(0.5)
+                cell.add(cb)
+            else:
+                cell.add(JLabel(""))
+
+            grid.add(cell)
+
+        update_count()
+        grid.revalidate()
+        grid.repaint()
+
+    def on_any_cb(_):
+        update_count()
+
+    for cb in cbs:
+        cb.addActionListener(on_any_cb)
+
+    # Bottom OK/Cancel
+    bottom = JPanel(FlowLayout(FlowLayout.RIGHT))
+    btn_ok = JButton("OK")
+    btn_cancel = JButton("Cancel")
+    bottom.add(btn_ok)
+    bottom.add(btn_cancel)
+    dlg.add(bottom, BorderLayout.SOUTH)
+
+    result = {"ok": False, "sel": []}
+
+    def on_ok(_):
+        sel = [i + 1 for i, cb in enumerate(cbs) if cb.isSelected()]
+        if not sel:
+            JOptionPane.showMessageDialog(
+                dlg,
+                "Select at least one %s to debleed." % label,
+                "Nothing selected",
+                JOptionPane.WARNING_MESSAGE
+            )
+            return
+        result["ok"] = True
+        result["sel"] = sel
+        dlg.dispose()
+
+    def on_cancel(_):
+        dlg.dispose()
+
+    btn_ok.addActionListener(on_ok)
+    btn_cancel.addActionListener(on_cancel)
+
+    # Size to screen
+    ge = GraphicsEnvironment.getLocalGraphicsEnvironment()
+    gc = ge.getDefaultScreenDevice().getDefaultConfiguration()
+    scr = Toolkit.getDefaultToolkit().getScreenSize()
+    ins = Toolkit.getDefaultToolkit().getScreenInsets(gc)
+    usable_w = scr.width  - ins.left - ins.right
+    usable_h = scr.height - ins.top  - ins.bottom
+    dlg.setSize(min(1100, max(600, usable_w - 80)), min(850, max(450, usable_h - 120)))
+    dlg.setLocationRelativeTo(None)
+
+    # Build now (estimate), then once after realized
+    rebuild_grid()
+
+    class _Later(Runnable):
+        def run(self):
+            rebuild_grid()
+    SwingUtilities.invokeLater(_Later())
+
+    # LIVE recompute on resize + debounce
+    resize_timer = {"t": None}
+
+    class _DoRebuild(ActionListener):
+        def actionPerformed(self, evt):
+            try:
+                rebuild_grid()
+            finally:
+                try:
+                    evt.getSource().stop()
+                except:
+                    pass
+                resize_timer["t"] = None
+
+    class _OnResize(ComponentAdapter):
+        def componentResized(self, evt):
+            try:
+                if resize_timer["t"] is not None:
+                    resize_timer["t"].stop()
+            except:
+                pass
+            t = Timer(120, _DoRebuild())
+            t.setRepeats(False)
+            resize_timer["t"] = t
+            t.start()
+
+    dlg.addComponentListener(_OnResize())
+
+    dlg.setVisible(True)
+
+    if not result["ok"]:
+        return None
+    return result["sel"]
+
+selected_channels = _select_planes_to_debleed(names, imp, axis_used)
+if selected_channels is None:
+    sys.exit()
+
+selected_set = set([c - 1 for c in selected_channels])  # 0-based indices
+
+# ---------------------------------------------------------------------
 # Helpers to build/restore groups
 # ---------------------------------------------------------------------
 def _auto_groups_from_rules(names):
@@ -431,17 +728,20 @@ def _auto_groups_from_rules(names):
                     break
     return [sorted(g) for g in rule_groups if len(g) >= 2]
 
-def _load_groups_from_saved_csv(csv_path, names):
+def _load_groups_from_saved_csv(csv_path, names, return_zero_pairs=False):
     if not os.path.exists(csv_path):
-        return []
+        return ([], set()) if return_zero_pairs else []
     try:
         with open(csv_path, "r") as f:
             lines = [ln.strip() for ln in f if ln.strip()]
-        if not lines: return []
+        if not lines:
+            return ([], set()) if return_zero_pairs else []
         header = [c.strip() for c in lines[0].split(",")]
-        if len(header) < 2: return []
+        if len(header) < 2:
+            return ([], set()) if return_zero_pairs else []
         header_names = header[1:]
         name_to_idx = {nm.upper(): i for i, nm in enumerate(names)}
+
         col_to_idx = []
         for nm in header_names:
             i = name_to_idx.get(nm.upper(), None)
@@ -449,10 +749,12 @@ def _load_groups_from_saved_csv(csv_path, names):
                 cand = None
                 for cur_nm, cur_i in name_to_idx.items():
                     if _tok_match(nm.upper(), cur_nm):
-                        cand = name_to_idx[cur_nm]; break
-                if cand is None: return []
+                        cand = cur_i; break
+                if cand is None:
+                    return ([], set()) if return_zero_pairs else []
                 i = cand
             col_to_idx.append(i)
+
         zero_pairs = set()
         for rline in lines[1:]:
             cells = [c.strip() for c in rline.split(",")]
@@ -471,12 +773,17 @@ def _load_groups_from_saved_csv(csv_path, names):
                 if row_idx != col_idx and v == "0":
                     zero_pairs.add((row_idx, col_idx))
                     zero_pairs.add((col_idx, row_idx))
-        if not zero_pairs: return []
+
+        if not zero_pairs:
+            return ([], zero_pairs) if return_zero_pairs else []
+
         neighbors = {i: set() for i in range(len(names))}
         for i, j in zero_pairs:
             neighbors[i].add(j); neighbors[j].add(i)
+
         sys.setrecursionlimit(10000)
         cliques, seen = [], set()
+
         def bronk(R, P, X):
             if not P and not X:
                 if len(R) >= 2:
@@ -490,18 +797,40 @@ def _load_groups_from_saved_csv(csv_path, names):
                 Nv = neighbors.get(v, set())
                 bronk(R | {v}, P & Nv, X & Nv)
                 P.remove(v); X.add(v)
+
         bronk(set(), set(range(len(names))), set())
-        return [sorted(g) for g in cliques]
+        groups = [sorted(g) for g in cliques]
+        return (groups, zero_pairs) if return_zero_pairs else groups
     except Exception:
-        return []
+        return ([], set()) if return_zero_pairs else []
 
 # ---------------------------------------------------------------------
-# Build initial groups (prefer CSV, else rules; no auto singletons)
+# Build initial groups (prefer CSV, else rules)
+# - Do NOT prebuild groups that contain none of the selected planes
+# - Add singleton groups for any selected plane not in any group
+# - Preserve old 0-pairs among totally-unselected planes (if CSV existed)
 # ---------------------------------------------------------------------
 groups_csv_path = os.path.splitext(img_path)[0] + ".csv"
-groups = _load_groups_from_saved_csv(groups_csv_path, names)
-if not groups:
+groups, old_zero_pairs = _load_groups_from_saved_csv(groups_csv_path, names, return_zero_pairs=True)
+
+hidden_zero_pairs = set()
+if groups:
+    hidden_zero_pairs = set((i, j) for (i, j) in old_zero_pairs
+                            if (i not in selected_set and j not in selected_set))
+else:
     groups = _auto_groups_from_rules(names)
+    hidden_zero_pairs = set()
+
+# Keep only groups that contain at least one selected plane
+groups = [g for g in groups if set(g) & selected_set]
+
+# Add singleton groups for selected planes not in any group
+in_any_group = set()
+for g in groups:
+    in_any_group.update(g)
+for idx in sorted(selected_set):
+    if idx not in in_any_group:
+        groups.append([idx])
 
 # ---------------------------------------------------------------------
 # Multi-group UI
@@ -513,10 +842,13 @@ def build_avail_model():
     model = DefaultListModel()
     for i, nm in enumerate(names):
         gs = _groups_for_channel(i)
+        debleed_tag = ""
+        if i in selected_set:
+            debleed_tag = " <span style='font-size:9px;color:gray'>(debleed)</span>"
         if gs:
-            html = "<html><b>%s</b><br/><span style='font-size:9px;color:gray'>%s</span></html>" % (nm, ", ".join(gs))
+            html = "<html><b>%s</b>%s<br/><span style='font-size:9px;color:gray'>%s</span></html>" % (nm, debleed_tag, ", ".join(gs))
         else:
-            html = "<html><b>%s</b><br/><span style='font-size:9px;color:#b00'>(no groups)</span></html>" % nm
+            html = "<html><b>%s</b>%s<br/><span style='font-size:9px;color:#b00'>(no groups)</span></html>" % (nm, debleed_tag)
         model.addElement(html)
     return model
 
@@ -599,20 +931,6 @@ def on_rem(_):
         last_add_group = None
     if any_change: refresh()
 
-def _parse_channels(spec, max_ch):
-    spec = (spec or "").strip().lower()
-    if spec in ("", "all", "*", "everything"):
-        return list(range(1, max_ch + 1))
-    out = []
-    for token in re.split(r"[,\s]+", spec):
-        if not token: continue
-        if "-" in token:
-            lo, hi = token.split("-", 1)
-            out.extend(range(int(lo), int(hi) + 1))
-        else:
-            out.append(int(token))
-    return sorted({c for c in out if 1 <= c <= max_ch})
-
 for b, f in ((btn_new, on_new), (btn_add, on_add), (btn_rem, on_rem)):
     b.addActionListener(f)
 
@@ -631,7 +949,8 @@ panel_title = ("<html><b>Co-expression groups</b> &nbsp;&mdash;&nbsp; "
                "Put channels that co-express in the same group. "
                "Channels that share any group are <b>not</b> used to debleed each other. "
                "Channels may be in <b>multiple</b> groups, and leaving a channel ungrouped is OK "
-               "(it will factor in all other channels).</html>")
+               "(it will factor in all other channels). "
+               "<br/><span style='font-size:9px;color:gray'>Note: groups with none of the selected planes were not pre-built.</span></html>")
 panel_tip = ("<html><span style='font-size:9px;color:gray'>Tip: Select a group (or a member of a group) on the right, "
              "select channel(s) on the left, then click <b>Add -&gt;</b> to add them to that same group.</span></html>")
 
@@ -660,8 +979,11 @@ if JOptionPane.showConfirmDialog(None, panel, "Bleed-through groups",
 
 # ---------------------------------------------------------------------
 # CSV (pairs share ANY group => 0, others 1). Persist for future runs.
+# Preserve old 0-pairs among totally-unselected planes if CSV existed.
 # ---------------------------------------------------------------------
 zero = {(i, j) for g in groups for i, j in itertools.permutations(g, 2)}
+zero |= hidden_zero_pairs
+
 csv = ["," + ",".join(names)]
 for r in range(n_ch):
     row = [names[r]]
@@ -672,7 +994,7 @@ with open(groups_csv_path, "w") as f:
     f.write("\n".join(csv))
 
 # ---------------------------------------------------------------------
-# Run parameters dialog
+# Run parameters dialog (planes already selected up front)
 # ---------------------------------------------------------------------
 _prefilled_env = _guess_conda_env_root("rfot")
 
@@ -683,24 +1005,23 @@ dlg.addMessage(
     "- Lower values -> more aggressive removal and faster runs.\n"
     "- Higher values -> gentler correction but slower.\n"
     "\n"
-    "Optionally, ignore overexposed pixels by setting saturated pixels to 0."
+    "Optionally, ignore overexposed pixels by setting saturated pixels to 0.\n"
+    "\n"
+    "Selected to debleed: %d %ss." % (len(selected_channels), _axis_label(axis_used))
 )
-dlg.addStringField("Channel(s) to process (e.g. 1,3-5 or 'all'):", "all")
 dlg.addNumericField("Patch size (patsize):", 16, 0)
 dlg.addStringField("Conda env path (root of env, e.g. .../envs/rfot):", _prefilled_env or "", 50)
 dlg.addCheckbox("Ignore overexposed pixels (set saturated to 0)", False)
-# NEW checkbox (default ON)
 dlg.addCheckbox("Keep-the-brightest heuristic (recommended OFF for Opal/Vectra)", True)
 
 dlg.showDialog()
 if dlg.wasCanceled():
     sys.exit()
 
-chan_spec = dlg.getNextString().strip()
 patsize = int(round(dlg.getNextNumber()))
 env_root = dlg.getNextString().strip()
 ignore_overexposed = dlg.getNextBoolean()
-keep_brightest = dlg.getNextBoolean()  # NEW
+keep_brightest = dlg.getNextBoolean()
 
 if dlg.invalidNumber() or patsize < 4 or (patsize % 2 != 0):
     IJ.showMessage("Invalid patch size",
@@ -743,7 +1064,7 @@ if keep_brightest and re.search(r"\b(opal|vectra)\b", meta_all, re.IGNORECASE):
         None, opts, opts[0]
     )
     if choice == 0:
-        keep_brightest = False  # Turn it OFF for this run
+        keep_brightest = False
 
 # ---------------------------------------------------------------------
 # Launch runner (external Python) based on heuristic toggle
@@ -751,12 +1072,10 @@ if keep_brightest and re.search(r"\b(opal|vectra)\b", meta_all, re.IGNORECASE):
 def _find_runner_script(keep_brightest):
     plugins_dir = IJ.getDir("plugins")
     base = os.path.join(plugins_dir, "Debleed")
-    cand = []
     if keep_brightest:
         cand = [os.path.join(base, "keep_the_brightest.py"),
                 os.path.join(base, "bin", "keep_the_brightest.py")]
     else:
-        # Accept both 'singal_based.py' (as requested) and 'signal_based.py'
         cand = [os.path.join(base, "singal_based.py"),
                 os.path.join(base, "signal_based.py"),
                 os.path.join(base, "bin", "singal_based.py"),
@@ -775,9 +1094,9 @@ if not runner_py:
         abort("Could not find 'singal_based.py' (or 'signal_based.py'). Put it in:\n"
               + os.path.join(IJ.getDir('plugins'), "Debleed"))
 
-channels = _parse_channels(chan_spec, n_ch)
+channels = sorted(set(int(c) for c in selected_channels))
 if not channels:
-    abort("No valid channels parsed from: '%s'" % chan_spec)
+    abort("No planes selected to debleed.")
 
 wait_dlg, wait_bar, wait_timer = _show_progress(len(channels))
 if len(channels) > 1:
@@ -788,14 +1107,13 @@ if len(channels) > 1:
 
 try:
     for i, ch in enumerate(channels, start=1):
-        IJ.showStatus("Processing channel %d of %d" % (i, len(channels)))
+        IJ.showStatus("Processing plane %d of %d" % (i, len(channels)))
         if len(channels) > 1:
             _pb_smooth_to(wait_bar, i)
             pct = int(round(100.0 * i / float(len(channels))))
             wait_bar.setString("%d / %d (%d%%)" % (i, len(channels), pct))
             wait_bar.repaint()
 
-        # Arguments match debleed.py interface
         cmd = [pyexe, runner_py, img_path, str(ch), "--patsize", str(patsize)]
         if ignore_overexposed:
             cmd.append("--ignore_overexposed")
@@ -805,11 +1123,11 @@ try:
 
         if proc.returncode != 0:
             err_msg = stderr.decode("utf-8", "replace")
-            abort("Runner failed for channel %d (exit %d).\n\n%s" % (ch, proc.returncode, err_msg))
+            abort("Runner failed for plane %d (exit %d).\n\n%s" % (ch, proc.returncode, err_msg))
 
         out = "%s_Channel_%d_debleed.tif" % (img_path[:-4], ch)
         if not os.path.exists(out):
-            abort("Result not found for channel %d:\n%s" % (ch, out))
+            abort("Result not found for plane %d:\n%s" % (ch, out))
         paths.append(out)
 finally:
     _pb_cleanup(wait_bar, wait_timer)
@@ -849,3 +1167,4 @@ else:
     for c_idx, ch_num in enumerate(channels, start=1):
         stk.setSliceLabel(_channel_label_with_groups(ch_num - 1), c_idx)
     result.updateAndDraw(); result.show()
+
