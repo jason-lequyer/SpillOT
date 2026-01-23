@@ -1,38 +1,30 @@
-# Debleed runner (Fiji / Jython) with:
-# - Up-front NxN checkbox grid selection of which planes to debleed
-#        * N = ceil(sqrt(total_planes))
-#        * Thumbnails ALWAYS shown (autoscaled per plane)
-#        * NONE selected by default (no Select All / Select None buttons)
-#        * Uses available space: fewer planes => bigger thumbs/labels
-#        * LIVE recompute on dialog resize (debounced) so it stays perfect while dragging
-#        * Thumbnails occupy a higher % of dialog (tighter gaps/padding + reserve based on actual checkbox height)
-# - Co-expression groups UI & persistence via CSV
-# - Channel names prefer "Name #i = ..." from slice labels / metadata
-# - Auto-grouping: only create groups with >= 2 present channels (plus selected singletons)
-# - "Add ->" adds to selected/right group, or last-used group if none selected
-# - Fixed progress text "i / N (XX%)"
-# - Prompts to save if image has unsaved changes, then debleeds saved file
-# - Extra co-expression rules for endothelial / immune / epithelial markers (+ your T-cell/nuclear)
-# - "Keep-the-brightest heuristic" checkbox (default ON)
-#        ON  -> run keep_the_brightest.py
-#        OFF -> run singal_based.py (also accepts signal_based.py)
-# - If "opal" or "vectra" appear in metadata and heuristic is ON, warn to turn it OFF
 
-# ---------------------------------------------------------------------
-# Group rules (used only for initial auto-assignment when NO saved CSV)
-# ---------------------------------------------------------------------
-groups_by_name = [
-    # The big immune / structural set
-    ["CA2", "CD116", "CD14", "CD20", "CD3", "CD4", "CD44", "CD45",
-     "CD45RO", "CD56", "CD57", "CD68", "CD8",
-     "DNA1", "DNA2",
-     "FOXP3", "Granzyme B", "Ki67", "NF-KB",
-     "NKX6.1", "PDX-1", "pan-Keratin"],
-
-    # Vascular / stem-cell pair
-    ["NESTIN", "CD31"],
-
-    # Singletons (used only for canonical naming; auto-groups require >= 2 members)
+groups = [
+    # Unfolded into singletons (deduped; first-seen order preserved)
+    ["CA2"],
+    ["CD116"],
+    ["CD14"],
+    ["CD20"],
+    ["CD3"],
+    ["CD4"],
+    ["CD44"],
+    ["CD45"],
+    ["CD45RO"],
+    ["CD56"],
+    ["CD57"],
+    ["CD68"],
+    ["CD8"],
+    ["DNA1"],
+    ["DNA2"],
+    ["FOXP3"],
+    ["Granzyme B"],
+    ["Ki67"],
+    ["NF-KB"],
+    ["NKX6.1"],
+    ["PDX-1"],
+    ["pan-Keratin"],
+    ["NESTIN"],
+    ["CD31"],
     ["HLA-ABC"],
     ["C-PEPTIDE"],
     ["GLUCAGON"],
@@ -43,20 +35,31 @@ groups_by_name = [
     ["HLA-DR"],
     ["PANCREATIC POLYPEPTIDE"],
     ["GHRELIN"],
+    ["LYVE1"],
+    ["PNAd"],
+    ["PDL1"],
+    ["DAPI"],
+    ["PanCK"],
+    ["tcrgd"],
+    ["PD1"],
 
-    # Endothelial cells
-    ["CD31", "LYVE1", "PNAd", "PDL1", "DAPI"],
-    # Immune cells (broad)
-    ["CD3", "PDL1", "DAPI"],
-    # Epithelial cells (PanCK + pan-Keratin as synonyms)
-    ["PanCK", "pan-Keratin", "PDL1", "DAPI"],
-
-    # T cells (your request)
-    ["CD8", "CD3", "tcrgd", "PD1"],
-
-    # Nuclear (your request)
-    ["Ki67", "DAPI"]
+    # Added as-is (NOT unfolded)
+    ["CD3", "CD4"],
+    ["CD3", "CD8"],
+    ["CD3", "CD56"],
+    ["CD56", "CD16"],
+    ["BCMA", "CD138"],
+    ["CD14", "HLA-DR"],
+    ["CD68", "HLA-DR"],
+    ["CD11c", "HLA-DR"],
+    ["CD123", "HLA-DR"],
+    ["CD16", "CD66b"],
+    ["CD16", "CD15"],
+    ["CD193", "Siglec-8"],
+    ["FcεR1α", "CD63", "CD203c"],
+    ["FcεR1α", "CD117", "Tryptase"],
 ]
+
 
 # ---------------------------------------------------------------------
 # Imports
@@ -71,7 +74,7 @@ from javax.swing import (JPanel, JScrollPane, JList, DefaultListModel,
                          JButton, BoxLayout, JOptionPane, JLabel, JDialog, JProgressBar, Timer,
                          JCheckBox, ImageIcon, BorderFactory, SwingConstants, SwingUtilities)
 from java.awt import (Dimension, Toolkit, BorderLayout, GraphicsEnvironment,
-                      GridLayout, FlowLayout, Insets)
+                      GridLayout, FlowLayout, Insets, Font)
 from java.awt.event import ActionListener, ComponentAdapter
 from java.lang import System as JSystem, Runnable
 
@@ -431,9 +434,9 @@ def _canonicalize_names_via_rules(names, groups_by_name):
 names = _canonicalize_names_via_rules(names, groups_by_name)
 
 # ---------------------------------------------------------------------
-# Up-front selection UI helpers (thumbnails)
+# Thumbnail helper (RECTANGULAR): fill the available (w,h) above the checkbox
 # ---------------------------------------------------------------------
-def _make_thumb_icon_for_plane(imp, one_based_plane_idx, thumb_px=80):
+def _make_thumb_icon_for_plane(imp, one_based_plane_idx, thumb_w=80, thumb_h=80):
     try:
         idx = slice_idx(one_based_plane_idx)
         ip = imp.getStack().getProcessor(idx)
@@ -442,21 +445,11 @@ def _make_thumb_icon_for_plane(imp, one_based_plane_idx, thumb_px=80):
 
         ip2 = ip.duplicate()
 
-        # Aspect-preserving resize: fit largest side to thumb_px
-        try:
-            sw = int(ip2.getWidth())
-            sh = int(ip2.getHeight())
-        except Exception:
-            sw, sh = (0, 0)
+        # Resize to the exact rectangle (fills space; no forced square)
+        tw = max(1, int(thumb_w))
+        th = max(1, int(thumb_h))
+        ip_small = ip2.resize(tw, th)
 
-        if sw > 0 and sh > 0:
-            scale = float(thumb_px) / float(max(sw, sh))
-            nw = max(1, int(round(sw * scale)))
-            nh = max(1, int(round(sh * scale)))
-        else:
-            nw = nh = int(thumb_px)
-
-        ip_small = ip2.resize(int(nw), int(nh))
         try:
             ip_small.resetMinAndMax()  # autoscale per plane
         except Exception:
@@ -474,6 +467,9 @@ def _make_thumb_icon_for_plane(imp, one_based_plane_idx, thumb_px=80):
     except Exception:
         return None
 
+# ---------------------------------------------------------------------
+# Up-front selection dialog (previous interface style), but expanded cell usage
+# ---------------------------------------------------------------------
 def _select_planes_to_debleed(names, imp, axis_used):
     label = _axis_label(axis_used)
     n = len(names)
@@ -482,17 +478,19 @@ def _select_planes_to_debleed(names, imp, axis_used):
 
     ngrid = int(math.ceil(math.sqrt(float(n))))
 
-    # Tighter spacing => more area for thumbnails
-    GRID_GAP   = 3
-    OUTER_PAD  = 4
+    # layout tuning: reduce dead space
+    GRID_GAP   = 4
+    OUTER_PAD  = 6
     CELL_PAD   = 2
-    THUMB_STEP = 8       # quantize thumbs to multiples of 8px
-    THUMB_MIN  = 16
-    THUMB_MAX  = 1024    # safety cap
+
+    # resize behavior tuning
+    SIZE_STEP  = 8      # quantize thumb dims to reduce regen thrash
+    MIN_THUMB  = 12
 
     dlg = JDialog(None, "Select %ss to Debleed" % label, True)
     dlg.setLayout(BorderLayout())
 
+    # Top message (same style as previous interface)
     top = JPanel()
     top.setLayout(BoxLayout(top, BoxLayout.Y_AXIS))
     msg = ("<html><b>Select which %ss to debleed</b><br/>"
@@ -507,7 +505,25 @@ def _select_planes_to_debleed(names, imp, axis_used):
     top.add(ctrl)
     dlg.add(top, BorderLayout.NORTH)
 
-    # Checkboxes: NONE selected by default, compact single-line-ish label
+    # Grid in center
+    grid = JPanel(GridLayout(ngrid, ngrid, GRID_GAP, GRID_GAP))
+    grid.setBorder(BorderFactory.createEmptyBorder(OUTER_PAD, OUTER_PAD, OUTER_PAD, OUTER_PAD))
+    dlg.add(grid, BorderLayout.CENTER)
+
+    # Bottom OK/Cancel
+    bottom = JPanel(FlowLayout(FlowLayout.RIGHT))
+    btn_ok = JButton("OK")
+    btn_cancel = JButton("Cancel")
+    try:
+        btn_ok.setMargin(Insets(2, 10, 2, 10))
+        btn_cancel.setMargin(Insets(2, 10, 2, 10))
+    except Exception:
+        pass
+    bottom.add(btn_ok)
+    bottom.add(btn_cancel)
+    dlg.add(bottom, BorderLayout.SOUTH)
+
+    # Checkboxes (NONE selected by default), compact single-line-ish label
     cbs = []
     for i, nm in enumerate(names, start=1):
         html = "<html><center><b>%s</b> <span style='font-size:9px;color:gray'>(%d)</span></center></html>" % (nm, i)
@@ -518,37 +534,28 @@ def _select_planes_to_debleed(names, imp, axis_used):
             cb.setMargin(Insets(0, 0, 0, 0))
         except Exception:
             pass
-        try:
-            cb.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0))
-        except Exception:
-            pass
         cbs.append(cb)
 
-    # Cache icons for the current thumb size only (clear when size changes)
+    # Cache icons for current thumb size only
     icons_cache = {}
-    state = {"thumb_px": None}
-
-    grid = JPanel(GridLayout(ngrid, ngrid, GRID_GAP, GRID_GAP))
-    grid.setBorder(BorderFactory.createEmptyBorder(OUTER_PAD, OUTER_PAD, OUTER_PAD, OUTER_PAD))
-    dlg.add(grid, BorderLayout.CENTER)
+    state = {"tw": None, "th": None, "font_pt": None}
 
     def update_count():
         sel = sum(1 for cb in cbs if cb.isSelected())
         lbl_count.setText("Selected: %d / %d" % (sel, n))
         lbl_count.repaint()
 
-    def _quantize(px):
+    def _q(px):
         px = int(px)
         if px <= 0:
-            return THUMB_MIN
-        q = int(THUMB_STEP)
-        return max(THUMB_MIN, min(THUMB_MAX, q * int(round(float(px) / q))))
+            return MIN_THUMB
+        return max(MIN_THUMB, SIZE_STEP * int(round(float(px) / float(SIZE_STEP))))
 
-    def _compute_thumb_px():
+    def _compute_cell_dims():
         gw, gh = grid.getWidth(), grid.getHeight()
         if gw <= 0 or gh <= 0:
-            gw = max(300, dlg.getWidth() - 40)
-            gh = max(200, dlg.getHeight() - 140)
+            gw = max(300, dlg.getWidth() - 60)
+            gh = max(200, dlg.getHeight() - 200)
 
         try:
             ins = grid.getInsets()
@@ -559,57 +566,87 @@ def _select_planes_to_debleed(names, imp, axis_used):
 
         cell_w = float(avail_w - (ngrid - 1) * GRID_GAP) / float(ngrid)
         cell_h = float(avail_h - (ngrid - 1) * GRID_GAP) / float(ngrid)
+        return cell_w, cell_h
 
-        # Reserve exactly what checkbox needs (preferred height), plus tiny safety pad
-        cb_h = 0
+    def _font_for_cell(cell_w, cell_h):
+        # Scale font with cell size (small grids => bigger text/checkbox)
+        # Clamp to keep it sane.
+        pt = int(max(9, min(18, cell_h / 7.0)))
+        return pt
+
+    def _ensure_font(pt):
+        if state["font_pt"] == pt:
+            return
+        try:
+            f = Font("SansSerif", Font.PLAIN, int(pt))
+            for cb in cbs:
+                cb.setFont(f)
+        except Exception:
+            pass
+        state["font_pt"] = pt
+
+    def _max_checkbox_height():
+        mh = 0
         for cb in cbs:
             try:
                 h = cb.getPreferredSize().height
-                if h > cb_h:
-                    cb_h = h
+                if h > mh:
+                    mh = h
             except Exception:
                 pass
+        if mh <= 0:
+            mh = 24
+        return mh
 
-        reserve_h = cb_h + (CELL_PAD * 2) + 6
-
-        thumb_by_w = cell_w - (CELL_PAD * 2)
-        thumb_by_h = cell_h - reserve_h - (CELL_PAD * 2)
-
-        thumb = int(min(thumb_by_w, thumb_by_h))
-        thumb = max(THUMB_MIN, thumb)
-        return _quantize(thumb)
-
-    def _get_icon(i0, thumb_px):
+    def _get_icon(i0, tw, th):
         if i0 not in icons_cache:
-            icons_cache[i0] = _make_thumb_icon_for_plane(imp, i0 + 1, thumb_px=thumb_px)
+            icons_cache[i0] = _make_thumb_icon_for_plane(imp, i0 + 1, thumb_w=tw, thumb_h=th)
         return icons_cache[i0]
 
     def rebuild_grid():
-        thumb_px = _compute_thumb_px()
-        if state["thumb_px"] != thumb_px:
+        cell_w, cell_h = _compute_cell_dims()
+
+        # Font scaled to the cell; affects checkbox height
+        fpt = _font_for_cell(cell_w, cell_h)
+        _ensure_font(fpt)
+
+        cb_h = _max_checkbox_height()
+
+        # Compute rectangle for thumbnail (fills width, and height above checkbox)
+        tw = int(cell_w - 2 * CELL_PAD)
+        th = int(cell_h - cb_h - 2 * CELL_PAD)
+
+        # If there are super long labels that wrap, th might get tiny; clamp.
+        tw = max(MIN_THUMB, tw)
+        th = max(MIN_THUMB, th)
+
+        # Quantize to reduce regenerating while dragging
+        twq = _q(tw)
+        thq = _q(th)
+
+        if state["tw"] != twq or state["th"] != thq:
             icons_cache.clear()
-            state["thumb_px"] = thumb_px
+            state["tw"], state["th"] = twq, thq
 
         grid.removeAll()
         total_cells = ngrid * ngrid
 
         for cell_i in range(total_cells):
-            cell = JPanel()
-            cell.setLayout(BoxLayout(cell, BoxLayout.Y_AXIS))
+            cell = JPanel(BorderLayout())
             cell.setBorder(BorderFactory.createEmptyBorder(CELL_PAD, CELL_PAD, CELL_PAD, CELL_PAD))
 
             if cell_i < n:
-                icon = _get_icon(cell_i, thumb_px)
-                if icon is not None:
-                    lab = JLabel(icon)
-                    lab.setAlignmentX(0.5)
-                    cell.add(lab)
+                icon = _get_icon(cell_i, twq, thq)
+                img_lab = JLabel(icon)
+                img_lab.setHorizontalAlignment(SwingConstants.CENTER)
+                img_lab.setVerticalAlignment(SwingConstants.CENTER)
+                cell.add(img_lab, BorderLayout.CENTER)
 
                 cb = cbs[cell_i]
-                cb.setAlignmentX(0.5)
-                cell.add(cb)
+                cb.setHorizontalAlignment(SwingConstants.CENTER)
+                cell.add(cb, BorderLayout.SOUTH)
             else:
-                cell.add(JLabel(""))
+                cell.add(JLabel(""), BorderLayout.CENTER)
 
             grid.add(cell)
 
@@ -617,20 +654,15 @@ def _select_planes_to_debleed(names, imp, axis_used):
         grid.revalidate()
         grid.repaint()
 
-    def on_any_cb(_):
-        update_count()
-
+    # Update count when clicking checkboxes (no rebuild needed)
+    class _Count(ActionListener):
+        def actionPerformed(self, evt):
+            update_count()
+    count_listener = _Count()
     for cb in cbs:
-        cb.addActionListener(on_any_cb)
+        cb.addActionListener(count_listener)
 
-    # Bottom OK/Cancel
-    bottom = JPanel(FlowLayout(FlowLayout.RIGHT))
-    btn_ok = JButton("OK")
-    btn_cancel = JButton("Cancel")
-    bottom.add(btn_ok)
-    bottom.add(btn_cancel)
-    dlg.add(bottom, BorderLayout.SOUTH)
-
+    # OK/Cancel
     result = {"ok": False, "sel": []}
 
     def on_ok(_):
@@ -1167,4 +1199,3 @@ else:
     for c_idx, ch_num in enumerate(channels, start=1):
         stk.setSliceLabel(_channel_label_with_groups(ch_num - 1), c_idx)
     result.updateAndDraw(); result.show()
-
