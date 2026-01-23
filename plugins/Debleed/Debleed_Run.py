@@ -1,8 +1,4 @@
-# =====================================================================
-# Debleed_Run.py (Fiji/ImageJ Jython)
-# CANCEL-SAFE VERSION: suppresses the scary console traceback on Cancel
-# (i.e., catches SystemExit so SciJava doesn't log it as an ERROR)
-# =====================================================================
+
 
 try:
 
