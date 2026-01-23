@@ -1,6 +1,5 @@
 
 groups = [
-    # Unfolded into singletons (deduped; first-seen order preserved)
     ["CA2"],
     ["CD116"],
     ["CD14"],
@@ -42,8 +41,6 @@ groups = [
     ["PanCK"],
     ["tcrgd"],
     ["PD1"],
-
-    # Added as-is (NOT unfolded)
     ["CD3", "CD4"],
     ["CD3", "CD8"],
     ["CD3", "CD56"],
