@@ -320,7 +320,8 @@ try:
             return imp.getStackIndex(1, 1, c)
 
     def _axis_label(axis_used):
-        return {"channels":"Channel", "slices":"Slice", "frames":"Frame"}.get(axis_used, "Channel")
+        # UI naming: always call the plane axis "Channel" (even if stored as slices/frames)
+        return "Channel"
 
     # ---------------------------------------------------------------------
     # Metadata helpers
@@ -496,19 +497,11 @@ try:
         dlg = JDialog(None, "Select %ss to Debleed" % label, True)
         dlg.setLayout(BorderLayout())
 
-        # Top message (same style as previous interface)
+        # Top message (header only; remove everything underneath)
         top = JPanel()
         top.setLayout(BoxLayout(top, BoxLayout.Y_AXIS))
-        msg = ("<html><b>Select which %ss to debleed</b><br/>"
-               "<span style='font-size:9px;color:gray'>"
-               "Thumbnails are autoscaled per %s. Nothing is selected by default."
-               "</span></html>") % (label, label.lower())
+        msg = ("<html><b>Select which %ss to debleed</b></html>") % (label,)
         top.add(JLabel(msg))
-
-        ctrl = JPanel(FlowLayout(FlowLayout.LEFT))
-        lbl_count = JLabel("Selected: 0 / %d" % n)
-        ctrl.add(lbl_count)
-        top.add(ctrl)
         dlg.add(top, BorderLayout.NORTH)
 
         # Grid in center
@@ -545,11 +538,6 @@ try:
         # Cache icons for current thumb size only
         icons_cache = {}
         state = {"tw": None, "th": None, "font_pt": None}
-
-        def update_count():
-            sel = sum(1 for cb in cbs if cb.isSelected())
-            lbl_count.setText("Selected: %d / %d" % (sel, n))
-            lbl_count.repaint()
 
         def _q(px):
             px = int(px)
@@ -656,17 +644,8 @@ try:
 
                 grid.add(cell)
 
-            update_count()
             grid.revalidate()
             grid.repaint()
-
-        # Update count when clicking checkboxes (no rebuild needed)
-        class _Count(ActionListener):
-            def actionPerformed(self, evt):
-                update_count()
-        count_listener = _Count()
-        for cb in cbs:
-            cb.addActionListener(count_listener)
 
         # OK/Cancel
         result = {"ok": False, "sel": []}
@@ -988,7 +967,7 @@ try:
                    "Channels that share any group are <b>not</b> used to debleed each other. "
                    "Channels may be in <b>multiple</b> groups, and leaving a channel ungrouped is OK "
                    "(it will factor in all other channels). "
-                   "<br/><span style='font-size:9px;color:gray'>Note: groups with none of the selected planes were not pre-built.</span></html>")
+                   "<br/><span style='font-size:9px;color:gray'>Note: groups with none of the selected channels were not pre-built.</span></html>")
     panel_tip = ("<html><span style='font-size:9px;color:gray'>Tip: Select a group (or a member of a group) on the right, "
                  "select channel(s) on the left, then click <b>Add -&gt;</b> to add them to that same group.</span></html>")
 
@@ -1134,7 +1113,7 @@ try:
 
     channels = sorted(set(int(c) for c in selected_channels))
     if not channels:
-        abort("No planes selected to debleed.")
+        abort("No channels selected to debleed.")
 
     wait_dlg, wait_bar, wait_timer = _show_progress(len(channels))
     if len(channels) > 1:
@@ -1145,7 +1124,7 @@ try:
 
     try:
         for i, ch in enumerate(channels, start=1):
-            IJ.showStatus("Processing plane %d of %d" % (i, len(channels)))
+            IJ.showStatus("Processing channel %d of %d" % (i, len(channels)))
             if len(channels) > 1:
                 _pb_smooth_to(wait_bar, i)
                 pct = int(round(100.0 * i / float(len(channels))))
@@ -1161,11 +1140,11 @@ try:
 
             if proc.returncode != 0:
                 err_msg = stderr.decode("utf-8", "replace")
-                abort("Runner failed for plane %d (exit %d).\n\n%s" % (ch, proc.returncode, err_msg))
+                abort("Runner failed for channel %d (exit %d).\n\n%s" % (ch, proc.returncode, err_msg))
 
             out = "%s_Channel_%d_debleed.tif" % (img_path[:-4], ch)
             if not os.path.exists(out):
-                abort("Result not found for plane %d:\n%s" % (ch, out))
+                abort("Result not found for channel %d:\n%s" % (ch, out))
             paths.append(out)
     finally:
         _pb_cleanup(wait_bar, wait_timer)
