@@ -57,7 +57,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
    - The plugin proposes an initial auto-grouping using channel names and a built-in lookup table of known co-expressing channels in IMC. Review and adjust as needed.
 
 5) Finally, it will ask you to enter some parameters:
-   - Patch size, must be an even integer greater than or equal to 4. Smaller patch size leads to more aggressive and faster debleeding. Default is 16, best results at 24.
+   - Patch size, must be an even integer greater than or equal to 4. Smaller patch size leads to more aggressive and faster debleeding. Default is 16, can sometimes see imprvoement with patch size as high as 28.
    - Conda env path: the plugin tries to prefill the path to the rfot environment. If it is blank, paste the full path to your env. Examples are in the FAQ below.
    - Keep the brightest heuristic: assumes brightest isntance of a signal is the true signal and calls anything dimmer bleed-through, if this assumption is invalid (which is commonly the case with Opal), turn off to have our brightness-invariant extrema based signal detection performed.
    - Ignore overexposed pixels: any pixel hitting the pixel intensity limit of the image format (e.g. 4096 for 12-bit) will be set to zero before debleeding. Rarely needed.
@@ -65,7 +65,7 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 Click OK to start. A progress window shows elapsed time while each channel is processed.
 
 
-## Outputs
+### Outputs
 
 - Single channel mode produces `..._Channel_<N>_debleed.tif`.
 - All channels mode produces `..._debleed.tif`.
