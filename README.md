@@ -194,7 +194,7 @@ The denoiser can be run in the exact same way as the terminal version of the deb
 
 ```python
 cd <masterdirectoryname>
-conda activate RFOT
+conda activate rfot
 python denoise.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
@@ -206,7 +206,7 @@ To denoise 2D images, create a folder in the master directory (the directory tha
 
 ```python
 cd <masterdirectoryname>
-conda activate RFOT
+conda activate rfot
 python denoise2D.py <noisyfolder>/<noisyimagename>
 ```
 Replacing "masterdirectoryname" with the full path to the directory that contains denoise2D.py, replacing "noisyfolder" with the name of the folder containing images you want denoised and replacing "noisyimagename" with the name of the image file you want denoised. Results will be saved to the directory '<noisyolder>_denoised'. Issues may arise if using an image format that is not supported by the tifffile python package, to fix these issues you can open your images in ImageJ and re-save them as .tif (even if they were already .tif, this will convert them to ImageJ .tif).
