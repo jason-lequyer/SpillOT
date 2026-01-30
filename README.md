@@ -44,9 +44,12 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
      - Linux: `Fiji.app/plugins/Debleed/`
    - Restart Fiji or use Help -> Refresh Menus.
 
+
+
+
 ## How to Run in Fiji
 
-1) Open the image in Fiji as a TIFF stack where each slice corresponds to a single channel. To do this for Opal and some other proprietary formats, you may need to use Plugins → Bio-Formats → Bio-Formats Importer, tick Split channels on the popup menu and select the image series that contains the true channel-by-channel data.
+1) Open the image in Fiji as a TIFF stack where each slice corresponds to a single channel. To do this for some proprietary biological imaging formats, you may need to use Plugins → Bio-Formats → Bio-Formats Importer, tick Split channels on the popup menu and select the image series that contains the true channel-by-channel data. If using Opal MIF using inForm, see note below. 
 2) Run the plugin from the menu if visible:
    - Plugins -> Debleed -> Debleed_Run
    - If it does not appear, open `Debleed_Run.py` in Fiji Script Editor and click Run, or use Help -> Refresh Menus.
@@ -63,6 +66,25 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
    - Ignore overexposed pixels: any pixel hitting the pixel intensity limit of the image format (e.g. 4096 for 12-bit) will be set to zero before debleeding. Rarely needed.
 
 Click OK to start. A progress window shows elapsed time while each channel is processed.
+
+### Note on Exporting Opal / Vectra `.mif` images (inForm → TIFF for RefineOT)
+
+RefineOT expects input as a **TIFF stack** where **each slice is one marker/channel** (grayscale).
+
+If your data starts as an **Opal/Vectra `.mif`**, we recommend exporting **unmixed component (composite) images** from **inForm** using these settings:
+
+- **Select Reported Units**: **Normalized for Exposure** (sometimes described as “Normalized to Exposure”)
+- **Weighting**: **Total**
+
+This corresponds to exporting **“Normalized to Exposure” + “Total” composite images**, which is what we used successfully for Opal data.
+
+Make sure you are exporting the **unmixed component/composite channels** (one per marker), not an RGB-rendered image. Depending on your inForm export, you may get either:
+  - a single multi-page TIFF / stack, or
+  - one TIFF per channel.
+  
+If you get one TIFF per channel, you can stack them in Fiji via:
+**Image → Stacks → Images to Stack…**
+(ensure the channel order matches your marker list / downstream CSV matrix order if you use one).
 
 
 ### Outputs
