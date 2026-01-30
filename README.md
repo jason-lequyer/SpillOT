@@ -21,7 +21,6 @@ Highly multiplexed imaging techniques are vital tools in biomedical research, us
 ---
 
 # Fiji Plugin
-
 ## Quick Start
 
 1) Install Fiji and anaconda if needed
