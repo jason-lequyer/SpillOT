@@ -72,10 +72,9 @@ RefineOT expects input as a **TIFF stack** where **each slice is one marker/chan
 
 If your data starts as an **Opal/Vectra `.mif`**, we recommend exporting **unmixed component (composite) images** from **inForm** using these settings:
 
-- **Select Reported Units**: **Normalized for Exposure** (sometimes described as “Normalized to Exposure”)
+- **Select Reported Units**: **Normalized for Exposure**
 - **Weighting**: **Total**
 
-This corresponds to exporting **“Normalized to Exposure” + “Total” composite images**, which is what we used successfully for Opal data.
 
 ![inForm “Component Units” settings (set Select Reported Units = Normalized for Exposure; Weighting = Total)](inform_component_units.png)
 
