@@ -133,7 +133,7 @@ python debleed.py <path/to/stack.tif> all
 ```
 ### Optional arguments
 
-#### Co-expression / Veto Matrix (Hightly recommended to use)
+#### Co-expression / Veto Matrix (Optional, but highly recommended)
 
 You can provide a **veto (co-expression) matrix** specifying which channels should *not* be considered when debleeding a given target channel.
 
