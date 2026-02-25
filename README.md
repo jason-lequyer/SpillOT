@@ -88,10 +88,11 @@ If you get one TIFF per channel, you can stack them in Fiji via:
 
 
 ### Outputs
+The plugin produces two outputs:
+- Per-channel outputs (only for channels you selected to debleed): `..._Channel_<N>_debleed.tif`
+- Full-stack output: the original stack re-saved with each selected channel replaced by its debleeded version (all other channels unchanged): `..._debleed.tif`
 
-- Single channel mode produces `..._Channel_<N>_debleed.tif`.
-- All channels mode produces `..._debleed.tif`.
-- The datatype matches your input. Outputs are ImageJ compatible TIFFs.
+The datatype matches your input. Outputs are ImageJ-compatible TIFFs.
 
 
 ## Command-Line Use (Terminal / Cluster)
@@ -118,19 +119,10 @@ python debleed.py IMC_smallcrop/IMC_smallcrop.tif 21
 
 Channel indexing is **1-based** (so `21` means the 21st channel in the TIFF stack).
 
-### Multiple channels / all channels
+Once again, two outputs are produced:
+- Per-channel outputs (only for channels you selected to debleed): `..._Channel_<N>_debleed.tif`
+- Full-stack output: the original stack re-saved with each selected channel replaced by its debleeded version (all other channels unchanged): `..._debleed.tif`
 
-You can process multiple channels using comma-separated values and ranges:
-
-```bash
-python debleed.py <path/to/stack.tif> 1,3-5
-```
-
-To process **all channels** in the stack:
-
-```bash
-python debleed.py <path/to/stack.tif> all
-```
 ### Optional arguments
 
 #### Co-expression / Veto Matrix (Optional, but highly recommended)
