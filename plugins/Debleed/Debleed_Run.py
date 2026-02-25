@@ -264,6 +264,20 @@ try:
         except Exception as e:
             abort("Could not save the image before running.\n\n%s" % str(e))
 
+    # Keep original file path for naming outputs (even if we later temp-save for processing)
+    orig_path_for_naming = ""
+    try:
+        _fi0 = imp.getFileInfo()
+    except Exception:
+        _fi0 = None
+    if (_fi0 is None) or (not _fi0.directory) or (not _fi0.fileName):
+        try:
+            _fi0 = imp.getOriginalFileInfo()
+        except Exception:
+            _fi0 = None
+    if _fi0 and _fi0.directory and _fi0.fileName:
+        orig_path_for_naming = os.path.join(_fi0.directory, _fi0.fileName)
+
     force_temp_save = False
 
     # Split RGB composite with single channel to R/G/B stacks
@@ -304,6 +318,9 @@ try:
         tmp = tempfile.NamedTemporaryFile(prefix="debleed_", suffix=".tif", delete=False)
         img_path = tmp.name
         IJ.saveAsTiff(imp, img_path)
+
+    # Use the original file name for outputs if available, otherwise fall back to processing path
+    out_base_path = orig_path_for_naming or img_path
 
     # Channel axis detection
     axis_counts = {"channels": imp.getNChannels(),
@@ -1093,9 +1110,8 @@ try:
             cand = [os.path.join(base, "keep_the_brightest.py"),
                     os.path.join(base, "bin", "keep_the_brightest.py")]
         else:
-            cand = [os.path.join(base, "singal_based.py"),
-                    os.path.join(base, "signal_based.py"),
-                    os.path.join(base, "bin", "singal_based.py"),
+            # No typo protection: ONLY signal_based.py
+            cand = [os.path.join(base, "signal_based.py"),
                     os.path.join(base, "bin", "signal_based.py")]
         for p in cand:
             if os.path.exists(p):
@@ -1108,7 +1124,7 @@ try:
             abort("Could not find 'keep_the_brightest.py'. Put it in:\n"
                   + os.path.join(IJ.getDir('plugins'), "Debleed"))
         else:
-            abort("Could not find 'singal_based.py' (or 'signal_based.py'). Put it in:\n"
+            abort("Could not find 'signal_based.py'. Put it in:\n"
                   + os.path.join(IJ.getDir('plugins'), "Debleed"))
 
     channels = sorted(set(int(c) for c in selected_channels))
@@ -1185,10 +1201,77 @@ try:
             stk.setSliceLabel(_channel_label_with_groups(ch_num - 1), c_idx)
         result.updateAndDraw(); result.show()
 
+    # ---------------------------------------------------------------------
+    # Build + save FULL stack with debleeded planes replaced (others unchanged)
+    # Saved as: <original_stack_name>_debleed.tif
+    # ---------------------------------------------------------------------
+    try:
+        # Map original stack slice-index -> debleeded ImageProcessor
+        repl_by_stack_idx = {}
+        for i, ch_num in enumerate(channels):
+            try:
+                de_imp = imps[i]
+                if de_imp is None:
+                    continue
+                # duplicate to avoid sharing processor objects across stacks
+                repl_by_stack_idx[slice_idx(ch_num)] = de_imp.getProcessor().duplicate()
+            except Exception:
+                pass
+
+        orig_stack = imp.getStack()
+        full_stack = ImageStack(imp.getWidth(), imp.getHeight())
+
+        for si in range(1, imp.getStackSize() + 1):
+            lbl = orig_stack.getSliceLabel(si)
+            ip  = repl_by_stack_idx.get(si, orig_stack.getProcessor(si))
+            full_stack.addSlice(lbl, ip)
+
+        # Title for display
+        try:
+            base_title = os.path.splitext(os.path.basename(out_base_path))[0]
+        except Exception:
+            base_title = "Full debleed"
+        full_imp = ImagePlus(base_title + " (debleed)", full_stack)
+
+        # Preserve hyperstack dims + calibration if possible
+        try:
+            full_imp.setDimensions(imp.getNChannels(), imp.getNSlices(), imp.getNFrames())
+            full_imp.setOpenAsHyperStack(True)
+        except Exception:
+            pass
+        try:
+            full_imp.setCalibration(imp.getCalibration())
+        except Exception:
+            pass
+        try:
+            info_prop = imp.getProperty("Info")
+            if info_prop:
+                full_imp.setProperty("Info", info_prop)
+        except Exception:
+            pass
+
+        full_imp.updateAndDraw()
+        full_imp.show()
+
+        out_full = os.path.splitext(out_base_path)[0] + "_debleed.tif"
+
+        fs = FileSaver(full_imp)
+        if full_imp.getStackSize() > 1:
+            ok = fs.saveAsTiffStack(out_full)
+        else:
+            ok = fs.saveAsTiff(out_full)
+
+        if not ok:
+            abort("Could not save full debleed stack:\n%s" % out_full)
+
+        IJ.showStatus("Saved full debleed stack: " + out_full)
+
+    except Exception as e:
+        abort("Failed building/saving the full debleed stack.\n\n%s" % str(e))
+
 except SystemExit:
     # IMPORTANT:
     # - Fiji/SciJava prints uncaught SystemExit as a scary ERROR traceback.
     # - This swallow makes *Cancel / early exit* look clean in the console,
     #   regardless of which dialog/menu the user cancels from.
     pass
-
