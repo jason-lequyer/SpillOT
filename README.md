@@ -97,7 +97,7 @@ The datatype matches your input. Outputs are ImageJ-compatible TIFFs.
 
 ## Command-Line Use (Terminal / Cluster)
 
-This repository includes a **terminal-friendly** `debleed.py` wrapper that allows Debleed to be run outside Fiji on a workstation or compute cluster (e.g. SLURM). The script processes one or more channels from a TIFF stack and writes one output TIFF per processed channel for optimal paralellization.
+In the `plugins/debleed` folder you will also find a **terminal-friendly** `debleed.py` wrapper that allows Debleed to be run outside Fiji on a workstation or compute cluster (e.g. SLURM). The script processes one or more channels from a TIFF stack and writes one output TIFF per processed channel for optimal paralellization. The script assumes the other scripts in the `plugins/debleed` folder are also present and in the same directory as `debleed.py`.
 
 ### Basic usage
 
