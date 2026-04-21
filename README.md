@@ -312,7 +312,7 @@ To run SpillOT denoise on one of the noisy microscope images, open a terminal in
 
 ```bash
 cd <masterdirectoryname>
-python denoise2D.py Microscope_gaussianpoisson/1.tif
+python denoise2D.py Microscope_gaussianpoisson/1.tiffs
 ```
 
 The denoised results will be in the directory `Microscope_gaussianpoisson_denoised`.
@@ -368,12 +368,12 @@ python N2FDOM.py Microscope_gaussianpoisson
 
 # Optional mode: DetectChannels
 
-The repository also includes **DetectChannels** as an optional mode. Use DetectChannels when you want the software to help detect which channels are bleeding through into which other channels using the older keep-the-brightest or signal-based logic.
+The repository also includes **DetectChannels** as an optional mode. Use DetectChannels when you want the software to help detect which channels are bleeding through into which other channels.
 
 DetectChannels uses a co-expression / exclusion matrix rather than SpillOT's manual source-to-target removal matrix. Its matrix convention is:
 
 ```text
-1 or -1 = keep / allow comparison
+1 = keep / allow comparison
 0 or blank = exclude / veto comparison
 ```
 
