@@ -1,16 +1,16 @@
-# spillOT
+# SpillOT
 
-Highly multiplexed imaging techniques are widely used to study tissue architecture, cell states, and cell-cell interactions, but they can suffer from channel spillover and noise. **spillOT** is a spillover-removal and denoising toolkit. The Fiji/ImageJ + Python plugin provides user-guided removal of suspected spillover in highly multiplexed image stacks.
+Highly multiplexed imaging techniques are widely used to study tissue architecture, cell states, and cell-cell interactions, but they can suffer from channel spillover and noise. **SpillOT** is a spillover-removal and denoising toolkit. The Fiji/ImageJ + Python plugin provides user-guided removal of suspected spillover in highly multiplexed image stacks.
 
-Unlike ordinary linear compensation, spillOT does not simply subtract one channel globally from another. Instead, the user specifies which channels may be spilling into which target channels, and spillOT removes signal only where its structural patch-similarity logic detects matching local image structure.
+Unlike ordinary linear compensation, SpillOT does not simply subtract one channel globally from another. Instead, the user specifies which channels may be spilling into which target channels, and SpillOT removes signal only where its structural patch-similarity logic detects matching local image structure.
 
-![spillOT](gitfig.png)
+![SpillOT](gitfig.png)
 
 ## Contents
 
 - [Fiji plugin](#fiji-plugin)
   - [Quick start](#quick-start)
-  - [How to run spillOT in Fiji](#how-to-run-spillot-in-fiji)
+  - [How to run SpillOT in Fiji](#how-to-run-spillot-in-fiji)
   - [Manual spillover CSV](#manual-spillover-csv)
   - [Outputs](#outputs)
   - [Command-line use](#command-line-use-terminal--cluster)
@@ -27,7 +27,7 @@ Unlike ordinary linear compensation, spillOT does not simply subtract one channe
 
 # Fiji plugin
 
-spillOT is intended for cases where the user knows, or wants to specify, which channels are plausible sources of bleed-through into each target channel. For example, if signal from `Ki67` appears to spill into `CD8`, the user can mark `Ki67` as a channel to remove from `CD8`. spillOT will then remove `Ki67`-like signal from `CD8` only in image patches where the structural patch-similarity detector flags a match.
+SpillOT is intended for cases where the user knows, or wants to specify, which channels are plausible sources of bleed-through into each target channel. For example, if signal from `Ki67` appears to spill into `CD8`, the user can mark `Ki67` as a channel to remove from `CD8`. SpillOT will then remove `Ki67`-like signal from `CD8` only in image patches where the structural patch-similarity detector flags a match.
 
 ## Quick start
 
@@ -36,21 +36,21 @@ spillOT is intended for cases where the user knows, or wants to specify, which c
 - Download Fiji from https://fiji.sc/ and install it.
 - If you do not already have Anaconda or Miniconda, install one of them. Anaconda installation instructions are available here: https://docs.anaconda.com/anaconda/install/.
 
-### 2) Create a conda environment named `rfot`
+### 2) Create a conda environment named `spillot`
 
 Run the following in a terminal or Anaconda Prompt:
 
 ```bash
-conda create -n rfot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
-conda activate rfot
-python -c "import numpy, scipy, tifffile; print('RFOT env OK')"
+conda create -n spillot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
+conda activate spillot
+python -c "import numpy, scipy, tifffile; print('SpillOT env OK')"
 ```
 
-### 3) Install the spillOT Fiji plugin
+### 3) Install the SpillOT Fiji plugin
 
 Download this repository by clicking **Code → Download ZIP** on GitHub, then unzip it.
 
-Copy the spillOT plugin folder into your Fiji plugins directory. In this repository, the folder is:
+Copy the SpillOT plugin folder into your Fiji plugins directory. In this repository, the folder is:
 
 ```text
 plugins/spillOT/
@@ -61,7 +61,6 @@ After copying, your Fiji installation should contain something like:
 ```text
 Fiji.app/plugins/spillOT/SpillOT_.py
 Fiji.app/plugins/spillOT/SpillOT.py
-Fiji.app/plugins/spillOT/SpillOT-terminal.py
 ```
 
 Restart Fiji, or use:
@@ -73,14 +72,12 @@ Help → Refresh Menus
 The visible Fiji menu entry should be:
 
 ```text
-Plugins → spillOT → SpillOT
+Plugins → SpillOT → SpillOT
 ```
-
-The file `SpillOT_.py` is the Fiji launcher. The trailing underscore is intentional because Fiji uses underscores in script filenames to decide what appears in the Plugins menu. `SpillOT.py` is the backend Python runner and should not usually be run from the Fiji menu.
 
 ---
 
-## How to run spillOT in Fiji
+## How to run SpillOT in Fiji
 
 1. Open your image in Fiji as a TIFF stack where each slice or channel corresponds to one marker/channel.
 
@@ -96,21 +93,21 @@ The file `SpillOT_.py` is the Fiji launcher. The trailing underscore is intentio
    Image → Stacks → Images to Stack…
    ```
 
-2. Run spillOT:
+2. Run SpillOT:
 
    ```text
-   Plugins → spillOT → SpillOT
+   Plugins → SpillOT → SpillOT
    ```
 
    If it does not appear, open `SpillOT_.py` in the Fiji Script Editor and click **Run**, or use **Help → Refresh Menus**.
 
 3. Select which channels you want to clean.
 
-   This first menu asks which target channels should be processed. It does **not** automatically select channels based on an existing CSV.
+   This first menu asks which target channels should be processed.
 
 4. For each selected target channel, choose which other channels you suspect are bleeding into that target.
 
-   In this menu, the selected target channel is shown on the left, and candidate spillover/source channels are shown on the right. Check any channel that may be contributing spillover into the selected target. spillOT will remove checked channels from that target only where the structural patch-similarity logic detects a local match.
+   In this menu, the selected target channel is shown on the left, and candidate spillover/source channels are shown on the right. Check any channel that may be contributing spillover into the selected target. SpillOT will remove checked channels from that target only where the structural patch-similarity logic detects a local match.
 
 5. Enter run settings.
 
@@ -118,7 +115,7 @@ The file `SpillOT_.py` is the Fiji launcher. The trailing underscore is intentio
 
    - **Patch size**: must be an even integer greater than or equal to 4. The default is `16`. Smaller patch sizes are usually more aggressive and faster. Larger patch sizes can be gentler and may sometimes improve results for larger structures.
 
-   The dialog also asks for the path to the `rfot` conda environment. The plugin tries to prefill this. If the field is blank, paste the full path to your `rfot` environment. See the FAQ for examples.
+   The dialog also asks for the path to the `spillot` conda environment. The plugin tries to prefill this. If the field is blank, paste the full path to your `spillot` environment. See the FAQ for examples.
 
 6. Click **OK** to start.
 
@@ -128,7 +125,7 @@ A progress window will show elapsed time while channels are processed.
 
 ## Manual spillover CSV
 
-spillOT uses a manual spillover matrix to record which source channels should be considered for removal from each target channel.
+SpillOT uses a manual spillover matrix to record which source channels should be considered for removal from each target channel.
 
 The matrix convention is:
 
@@ -142,6 +139,8 @@ blank  = ignore
 any other number = ignore
 ```
 
+Channel names in the header row and first column are optional. If names are included, SpillOT will use them when possible. If names are left blank, the matrix is interpreted by order: the first data row is channel 1, the second data row is channel 2, and so on, with columns following the same channel order.
+
 For example:
 
 ```csv
@@ -152,15 +151,25 @@ CD31,0,0,0,1
 Ki67,0,0,0,0
 ```
 
+The same matrix can also be written without channel names if you prefer to rely only on order:
+
+```csv
+,,,,
+,0,1,0,0
+,0,0,0,0
+,0,0,0,1
+,0,0,0,0
+```
+
 This means:
 
-- remove `CD57` from `HLA-ABC` wherever spillOT detects structurally similar patches;
-- remove `Ki67` from `CD31` wherever spillOT detects structurally similar patches;
+- remove `CD57` from `HLA-ABC` wherever SpillOT detects structurally similar patches;
+- remove `Ki67` from `CD31` wherever SpillOT detects structurally similar patches;
 - leave all other channel pairs ignored.
 
 ### Automatic CSV loading in Fiji
 
-If a CSV with the same base name as the TIFF exists next to the image, spillOT loads it automatically.
+If a CSV with the same base name as the TIFF exists next to the image, SpillOT loads it automatically.
 
 Example:
 
@@ -169,7 +178,7 @@ NPOD6174_Body_ROI3.tif
 NPOD6174_Body_ROI3.csv
 ```
 
-The CSV is used to prepopulate the **per-target spillover/source-channel selection menus**. It does not preselect the first menu asking which target channels to clean. This lets you choose which rows to process while still using an existing matrix to prefill the channel-pair choices.
+The CSV is used to prepopulate the **per-target spillover/source-channel selection menus** after you choose which target channels to clean. This lets you choose which rows to process while still using an existing matrix to prefill the channel-pair choices.
 
 When the Fiji UI writes a CSV, it writes checked pairs as `1`.
 
@@ -177,7 +186,7 @@ When the Fiji UI writes a CSV, it writes checked pairs as `1`.
 
 ## Outputs
 
-spillOT writes outputs next to the input TIFF.
+SpillOT writes outputs next to the input TIFF.
 
 For each selected target channel `N`, it writes a per-channel output:
 
@@ -191,7 +200,7 @@ It also writes a full replacement stack:
 <stack_basename>_SpillOT.tif
 ```
 
-The full-stack output is the original stack with selected channels replaced by their spillOT-cleaned versions. Channels not selected for cleaning are left unchanged.
+The full-stack output is the original stack with selected channels replaced by their SpillOT-cleaned versions. Channels not selected for cleaning are left unchanged.
 
 The output datatype is matched back to the input datatype when possible, and outputs are ImageJ-compatible TIFFs.
 
@@ -199,15 +208,7 @@ The output datatype is matched back to the input datatype when possible, and out
 
 ## Command-line use: terminal / cluster
 
-spillOT can also be run outside Fiji, for example on a workstation or compute cluster.
-
-The terminal wrapper is:
-
-```text
-plugins/spillOT/SpillOT-terminal.py
-```
-
-The backend runner is:
+SpillOT can also be run outside Fiji, for example on a workstation or compute cluster. Use the same backend runner that Fiji calls:
 
 ```text
 plugins/spillOT/SpillOT.py
@@ -218,46 +219,34 @@ plugins/spillOT/SpillOT.py
 From the repository root:
 
 ```bash
-conda activate rfot
-python plugins/spillOT/SpillOT-terminal.py <path/to/stack.tif> <channel>
+conda activate spillot
+python plugins/spillOT/SpillOT.py <path/to/stack.tif> <channel>
 ```
 
 Example, processing channel 21:
 
 ```bash
-conda activate rfot
-python plugins/spillOT/SpillOT-terminal.py IMC_smallcrop/IMC_smallcrop.tif 21
+conda activate spillot
+python plugins/spillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
 Channel indexing is **1-based**, so `21` means the 21st channel in the TIFF stack.
 
-You can also process multiple channels:
+To process all channels, omit the channel number:
 
 ```bash
-python plugins/spillOT/SpillOT-terminal.py IMC_smallcrop/IMC_smallcrop.tif 1,3-5
-```
-
-Or all channels:
-
-```bash
-python plugins/spillOT/SpillOT-terminal.py IMC_smallcrop/IMC_smallcrop.tif all
+python plugins/spillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif
 ```
 
 ### Providing a CSV manually
 
-By default, spillOT looks for a same-name CSV next to the input TIFF:
+By default, SpillOT looks for a same-name CSV next to the input TIFF:
 
 ```text
 <stack_basename>.csv
 ```
 
 You can also specify a CSV explicitly:
-
-```bash
-python plugins/spillOT/SpillOT-terminal.py <path/to/stack.tif> 21 --csv <path/to/spillover_matrix.csv>
-```
-
-The backend runner also accepts the same CSV argument:
 
 ```bash
 python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 --csv <path/to/spillover_matrix.csv>
@@ -270,13 +259,13 @@ The aliases `--manual_csv` and `--manual-csv` are also accepted.
 Set patch size with:
 
 ```bash
-python plugins/spillOT/SpillOT-terminal.py <path/to/stack.tif> 21 --patsize 12
+python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 --patsize 12
 ```
 
 or:
 
 ```bash
-python plugins/spillOT/SpillOT-terminal.py <path/to/stack.tif> 21 -p 12
+python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 -p 12
 ```
 
 Patch size must be an even integer greater than or equal to 4. The default is `16`.
@@ -286,30 +275,16 @@ Patch size must be an even integer greater than or equal to 4. The default is `1
 To set saturated pixels to zero before processing and inpaint them afterward:
 
 ```bash
-python plugins/spillOT/SpillOT-terminal.py <path/to/stack.tif> 21 --ignore_overexposed
+python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 --ignore_overexposed
 ```
 
 This is rarely needed, but can be useful when saturated pixels are causing artifacts.
-
-### Verbose output
-
-To stream subprocess output and print the exact commands being run:
-
-```bash
-python plugins/spillOT/SpillOT-terminal.py <path/to/stack.tif> 21 --verbose
-```
-
-If the runner scripts are stored in a non-standard location, specify the runner directory:
-
-```bash
-python plugins/spillOT/SpillOT-terminal.py <path/to/stack.tif> 21 --runner_dir /path/to/plugins/spillOT
-```
 
 ---
 
 ## Opal / Vectra export note
 
-spillOT expects input as a TIFF stack where each slice is one marker/channel.
+SpillOT expects input as a TIFF stack where each slice is one marker/channel.
 
 If your data starts as an Opal/Vectra `.mif`, we recommend exporting unmixed component/composite images from inForm using these settings:
 
@@ -343,7 +318,7 @@ The denoiser can be run in a similar way to the terminal version of the spillove
 
 ```bash
 cd <masterdirectoryname>
-conda activate rfot
+conda activate spillot
 python denoise.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
@@ -355,7 +330,7 @@ To denoise 2D images, create a folder in the master directory and put your noisy
 
 ```bash
 cd <masterdirectoryname>
-conda activate rfot
+conda activate spillot
 python denoise2D.py <noisyfolder>/<noisyimagename>
 ```
 
@@ -369,9 +344,9 @@ To run anything beyond this point in the README, install another conda library:
 conda install anaconda::scikit-image=0.23.2
 ```
 
-### Using spillOT denoise on provided datasets
+### Using SpillOT denoise on provided datasets
 
-To run spillOT denoise on one of the noisy microscope images, open a terminal in the master directory and run:
+To run SpillOT denoise on one of the noisy microscope images, open a terminal in the master directory and run:
 
 ```bash
 cd <masterdirectoryname>
@@ -380,7 +355,7 @@ python denoise2D.py Microscope_gaussianpoisson/1.tif
 
 The denoised results will be in the directory `Microscope_gaussianpoisson_denoised`.
 
-To run spillOT denoise on the other datasets, first add synthetic Gaussian noise. For example, to test spillOT denoise on Set12 with sigma=25 Gaussian noise, first run:
+To run SpillOT denoise on the other datasets, first add synthetic Gaussian noise. For example, to test SpillOT denoise on Set12 with sigma=25 Gaussian noise, first run:
 
 ```bash
 cd <masterdirectoryname>
@@ -395,12 +370,12 @@ python denoise2D.py Set12_gaussian25/01.tif
 
 The denoised results will be returned in a folder named `Set12_gaussian25_denoised`.
 
-### Calculate accuracy of spillOT denoise
+### Calculate accuracy of SpillOT denoise
 
 To find the PSNR and SSIM between a folder containing denoised results and the corresponding folder containing known ground truths, such as `Set12_gaussian25_denoised` and `Set12`, install one more conda package:
 
 ```bash
-conda activate rfot
+conda activate spillot
 conda install -c anaconda scikit-image=0.19.2
 ```
 
@@ -417,10 +392,10 @@ The `255` at the end denotes the dynamic range of the image. For 8-bit images fr
 
 ### Running compared methods
 
-We can run DIP, Noise2Self, P2S, and N2F+DOM in the RFOT environment:
+We can run DIP, Noise2Self, P2S, and N2F+DOM in the SpillOT environment:
 
 ```bash
-conda activate rfot
+conda activate spillot
 python DIP.py Microscope_gaussianpoisson
 python N2S.py Microscope_gaussianpoisson
 python P2S.py Microscope_gaussianpoisson
@@ -433,7 +408,7 @@ python N2FDOM.py Microscope_gaussianpoisson
 
 The repository also includes **DetectChannels** as an optional mode. Use DetectChannels when you want the software to help detect which channels are bleeding through into which other channels using the older keep-the-brightest or signal-based logic.
 
-DetectChannels uses a co-expression / exclusion matrix rather than spillOT's manual source-to-target removal matrix. In the current compatibility format:
+DetectChannels uses a co-expression / exclusion matrix rather than SpillOT's manual source-to-target removal matrix. In the current compatibility format:
 
 ```text
 1 or -1 = keep / allow comparison
@@ -465,13 +440,13 @@ The menu item should appear as:
 Plugins → DetectChannels → DetectChannels
 ```
 
-Run DetectChannels if your goal is automatic detection of candidate bleed-through channel relationships. Run spillOT if you want to manually specify exactly which channels may be removed from each target channel.
+Run DetectChannels if your goal is automatic detection of candidate bleed-through channel relationships. Run SpillOT if you want to manually specify exactly which channels may be removed from each target channel.
 
 ---
 
 # Troubleshooting
 
-## spillOT does not appear in the Fiji Plugins menu
+## SpillOT does not appear in the Fiji Plugins menu
 
 Check that the visible launcher file is named:
 
@@ -495,11 +470,11 @@ If it still does not appear, open `SpillOT_.py` in Fiji's Script Editor and clic
 
 ## The plugin cannot find Python or the conda environment
 
-Make sure the `rfot` environment exists:
+Make sure the `spillot` environment exists:
 
 ```bash
-conda activate rfot
-python -c "import numpy, scipy, tifffile; print('RFOT env OK')"
+conda activate spillot
+python -c "import numpy, scipy, tifffile; print('SpillOT env OK')"
 ```
 
 If Fiji does not automatically find it, paste the full environment path into the dialog.
@@ -507,10 +482,10 @@ If Fiji does not automatically find it, paste the full environment path into the
 Typical paths look like:
 
 ```text
-macOS/Linux: /Users/<user>/miniconda3/envs/rfot
-macOS/Linux: /opt/anaconda3/envs/rfot
-Windows: C:\Users\<user>\miniconda3\envs\rfot
-Windows: C:\ProgramData\Anaconda3\envs\rfot
+macOS/Linux: /Users/<user>/miniconda3/envs/spillot
+macOS/Linux: /opt/anaconda3/envs/spillot
+Windows: C:\Users\<user>\miniconda3\envs\spillot
+Windows: C:\ProgramData\Anaconda3\envs\spillot
 ```
 
 ## My CSV is not being used
@@ -518,7 +493,7 @@ Windows: C:\ProgramData\Anaconda3\envs\rfot
 Make sure either:
 
 1. the CSV has the same base name as the TIFF and is in the same folder, or
-2. you pass it explicitly with `--csv` in terminal mode.
+2. you pass it explicitly with `--csv` in command-line mode.
 
 Example same-name pair:
 
@@ -527,9 +502,9 @@ sample_stack.tif
 sample_stack.csv
 ```
 
-Also confirm the matrix has the same channel order as the TIFF stack. Header names are helpful but not required; row and column order are the most important.
+Also confirm the matrix has the same channel order as the TIFF stack. Header names are helpful but not required. If the row/column names are omitted or left blank, SpillOT uses matrix order, so the first row/column corresponds to channel 1, the second to channel 2, and so on.
 
-## spillOT ran but nothing changed
+## SpillOT ran but nothing changed
 
 Common causes:
 
@@ -543,14 +518,14 @@ Common causes:
 Option 1: switch NumPy or SciPy to OpenBLAS builds:
 
 ```bat
-conda activate rfot
+conda activate spillot
 conda install -y -c conda-forge "blas=*=openblas" numpy scipy
 ```
 
 Or keep MKL by installing the MKL runtime and ensuring DLL search works:
 
 ```bat
-conda activate rfot
+conda activate spillot
 conda install -y -c defaults mkl intel-openmp mkl-service
 set CONDA_DLL_SEARCH_MODIFICATION_ENABLE=1
 ```
@@ -561,27 +536,27 @@ The plugin adds `<env>\Library\bin` to PATH for the child process on Windows.
 
 # FAQ
 
-## Should I use spillOT or DetectChannels?
+## Should I use SpillOT or DetectChannels?
 
-Use **spillOT** when you want direct control over which channels may be removed from which target channels. The CSV explicitly records every user-approved source-to-target channel pair.
+Use **SpillOT** when you want direct control over which channels may be removed from which target channels. The CSV explicitly records every user-approved source-to-target channel pair.
 
 Use **DetectChannels** if you specifically want the older automatic channel-relationship detection workflow.
 
-## Does spillOT perform linear compensation?
+## Does SpillOT perform linear compensation?
 
-No. spillOT does not globally subtract one channel from another. It uses the user-provided channel-pair matrix to decide which source channels are eligible, then removes signal only in local patches where the structural patch-similarity detector finds a match.
+No. SpillOT does not globally subtract one channel from another. It uses the user-provided channel-pair matrix to decide which source channels are eligible, then removes signal only in local patches where the structural patch-similarity detector finds a match.
 
 ## Are channel numbers 0-based or 1-based?
 
 User-facing channel numbers are **1-based** in Fiji and terminal commands. CSV rows and columns follow the TIFF stack order.
 
-## Can I use `-1` entries in a spillOT CSV?
+## Can I use `-1` entries in a SpillOT CSV?
 
-Yes. spillOT accepts both `1` and `-1` as active entries. The Fiji UI writes new checked entries as `1`.
+Yes. SpillOT accepts both `1` and `-1` as active entries. The Fiji UI writes new checked entries as `1`.
 
 ## What happens to blank CSV cells?
 
-Blank cells are ignored. They are equivalent to `0` for spillOT.
+Blank cells are ignored. They are equivalent to `0` for SpillOT.
 
 ## Where is my conda environment installed?
 
@@ -591,14 +566,14 @@ Run:
 conda env list
 ```
 
-Use the full path shown for `rfot`.
+Use the full path shown for `spillot`.
 
 Examples:
 
 ```text
-macOS: /opt/anaconda3/envs/rfot or ~/miniforge3/envs/rfot
-Windows: C:\Users\<you>\miniconda3\envs\rfot or C:\Users\<you>\anaconda3\envs\rfot
-Linux: ~/mambaforge/envs/rfot or ~/miniconda3/envs/rfot
+macOS: /opt/anaconda3/envs/spillot or ~/miniforge3/envs/spillot
+Windows: C:\Users\<you>\miniconda3\envs\spillot or C:\Users\<you>\anaconda3\envs\spillot
+Linux: ~/mambaforge/envs/spillot or ~/miniconda3/envs/spillot
 ```
 
 ## Can I use Mambaforge or Miniforge?
