@@ -53,14 +53,7 @@ Download this repository by clicking **Code → Download ZIP** on GitHub, then u
 Copy the SpillOT plugin folder into your Fiji plugins directory. In this repository, the folder is:
 
 ```text
-plugins/spillOT/
-```
-
-After copying, your Fiji installation should contain something like:
-
-```text
-Fiji.app/plugins/spillOT/SpillOT_.py
-Fiji.app/plugins/spillOT/SpillOT.py
+plugins/SpillOT/
 ```
 
 Restart Fiji, or use:
@@ -69,11 +62,6 @@ Restart Fiji, or use:
 Help → Refresh Menus
 ```
 
-The visible Fiji menu entry should be:
-
-```text
-Plugins → SpillOT → SpillOT
-```
 
 ---
 
@@ -81,7 +69,7 @@ Plugins → SpillOT → SpillOT
 
 1. Open your image in Fiji as a TIFF stack where each slice or channel corresponds to one marker/channel.
 
-   For some proprietary biological imaging formats, use:
+   For some proprietary biological imaging formats, you may need to use:
 
    ```text
    Plugins → Bio-Formats → Bio-Formats Importer
@@ -133,10 +121,6 @@ The matrix convention is:
 row    = target channel to clean
 column = channel suspected of bleeding/spilling into that target
 1      = remove this column channel from this row channel where patches match
--1     = also accepted for compatibility with older matrices
-0      = ignore
-blank  = ignore
-any other number = ignore
 ```
 
 Channel names in the header row and first column are optional. If names are included, SpillOT will use them when possible. If names are left blank, the matrix is interpreted by order: the first data row is channel 1, the second data row is channel 2, and so on, with columns following the same channel order.
@@ -145,42 +129,27 @@ For example:
 
 ```csv
 ,HLA-ABC,CD57,CD31,Ki67
-HLA-ABC,0,1,0,0
-CD57,0,0,0,0
-CD31,0,0,0,1
-Ki67,0,0,0,0
+HLA-ABC,,1,,
+CD57,,,,
+CD31,,,,1
+Ki67,,,,
 ```
 
-The same matrix can also be written without channel names if you prefer to rely only on order:
+The same matrix can also be written without channel names if you prefer to rely only on channel order:
 
 ```csv
 ,,,,
-,0,1,0,0
-,0,0,0,0
-,0,0,0,1
-,0,0,0,0
+,,1,,
+,,,,
+,,,,1
+,,,,
 ```
 
 This means:
 
 - remove `CD57` from `HLA-ABC` wherever SpillOT detects structurally similar patches;
 - remove `Ki67` from `CD31` wherever SpillOT detects structurally similar patches;
-- leave all other channel pairs ignored.
-
-### Automatic CSV loading in Fiji
-
-If a CSV with the same base name as the TIFF exists next to the image, SpillOT loads it automatically.
-
-Example:
-
-```text
-NPOD6174_Body_ROI3.tif
-NPOD6174_Body_ROI3.csv
-```
-
-The CSV is used to prepopulate the **per-target spillover/source-channel selection menus** after you choose which target channels to clean. This lets you choose which rows to process while still using an existing matrix to prefill the channel-pair choices.
-
-When the Fiji UI writes a CSV, it writes checked pairs as `1`.
+- leave channel pairs that are not marked with `1` unchanged.
 
 ---
 
@@ -211,7 +180,7 @@ The output datatype is matched back to the input datatype when possible, and out
 SpillOT can also be run outside Fiji, for example on a workstation or compute cluster. Use the same backend runner that Fiji calls:
 
 ```text
-plugins/spillOT/SpillOT.py
+plugins/SpillOT/SpillOT.py
 ```
 
 ### Basic terminal usage
@@ -220,14 +189,14 @@ From the repository root:
 
 ```bash
 conda activate spillot
-python plugins/spillOT/SpillOT.py <path/to/stack.tif> <channel>
+python plugins/SpillOT/SpillOT.py <path/to/stack.tif> <channel>
 ```
 
 Example, processing channel 21:
 
 ```bash
 conda activate spillot
-python plugins/spillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif 21
+python plugins/SpillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif 21
 ```
 
 Channel indexing is **1-based**, so `21` means the 21st channel in the TIFF stack.
@@ -235,7 +204,7 @@ Channel indexing is **1-based**, so `21` means the 21st channel in the TIFF stac
 To process all channels, omit the channel number:
 
 ```bash
-python plugins/spillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif
+python plugins/SpillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif
 ```
 
 ### Providing a CSV manually
@@ -249,7 +218,7 @@ By default, SpillOT looks for a same-name CSV next to the input TIFF:
 You can also specify a CSV explicitly:
 
 ```bash
-python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 --csv <path/to/spillover_matrix.csv>
+python plugins/SpillOT/SpillOT.py <path/to/stack.tif> 21 --csv <path/to/spillover_matrix.csv>
 ```
 
 The aliases `--manual_csv` and `--manual-csv` are also accepted.
@@ -259,13 +228,13 @@ The aliases `--manual_csv` and `--manual-csv` are also accepted.
 Set patch size with:
 
 ```bash
-python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 --patsize 12
+python plugins/SpillOT/SpillOT.py <path/to/stack.tif> 21 --patsize 12
 ```
 
 or:
 
 ```bash
-python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 -p 12
+python plugins/SpillOT/SpillOT.py <path/to/stack.tif> 21 -p 12
 ```
 
 Patch size must be an even integer greater than or equal to 4. The default is `16`.
@@ -275,7 +244,7 @@ Patch size must be an even integer greater than or equal to 4. The default is `1
 To set saturated pixels to zero before processing and inpaint them afterward:
 
 ```bash
-python plugins/spillOT/SpillOT.py <path/to/stack.tif> 21 --ignore_overexposed
+python plugins/SpillOT/SpillOT.py <path/to/stack.tif> 21 --ignore_overexposed
 ```
 
 This is rarely needed, but can be useful when saturated pixels are causing artifacts.
@@ -314,7 +283,7 @@ Make sure the channel order matches the row/column order of any CSV matrix you u
 
 The denoiser is not part of the Fiji plugin, but you can run it from the command line. We first need to install pytorch to our env though. Follow the instructions here to get a command you can enter to install pytorch: https://pytorch.org/get-started/locally/. If you have a GPU, select one of the compute platforms that starts with `CUDA`. The command the website gives you should start with `pip3`. Enter that command into the terminal and press enter.
 
-The denoiser can be run in a similar way to the terminal version of the spillover-removal tool:
+The denoiser can be run from the command line in a similar way:
 
 ```bash
 cd <masterdirectoryname>
@@ -408,7 +377,7 @@ python N2FDOM.py Microscope_gaussianpoisson
 
 The repository also includes **DetectChannels** as an optional mode. Use DetectChannels when you want the software to help detect which channels are bleeding through into which other channels using the older keep-the-brightest or signal-based logic.
 
-DetectChannels uses a co-expression / exclusion matrix rather than SpillOT's manual source-to-target removal matrix. In the current compatibility format:
+DetectChannels uses a co-expression / exclusion matrix rather than SpillOT's manual source-to-target removal matrix. Its matrix convention is:
 
 ```text
 1 or -1 = keep / allow comparison
@@ -457,7 +426,7 @@ SpillOT_.py
 and is inside your Fiji plugins folder, for example:
 
 ```text
-Fiji.app/plugins/spillOT/SpillOT_.py
+Fiji.app/plugins/SpillOT/SpillOT_.py
 ```
 
 Then restart Fiji or use:
@@ -493,7 +462,7 @@ Windows: C:\ProgramData\Anaconda3\envs\spillot
 Make sure either:
 
 1. the CSV has the same base name as the TIFF and is in the same folder, or
-2. you pass it explicitly with `--csv` in command-line mode.
+2. you pass it explicitly with `--csv` in terminal mode.
 
 Example same-name pair:
 
@@ -502,13 +471,13 @@ sample_stack.tif
 sample_stack.csv
 ```
 
-Also confirm the matrix has the same channel order as the TIFF stack. Header names are helpful but not required. If the row/column names are omitted or left blank, SpillOT uses matrix order, so the first row/column corresponds to channel 1, the second to channel 2, and so on.
+Also confirm the matrix has the same channel order as the TIFF stack. Header names are helpful but not required; row and column order are the most important.
 
 ## SpillOT ran but nothing changed
 
 Common causes:
 
-- the selected target channel row has no `1` or `-1` entries in the CSV;
+- the selected target channel row has no `1` entries in the CSV;
 - the first Fiji menu did not include the target channel you expected to process;
 - the checked source channels did not pass the structural patch-similarity detector;
 - the image is not a channel-by-channel TIFF stack.
@@ -550,13 +519,7 @@ No. SpillOT does not globally subtract one channel from another. It uses the use
 
 User-facing channel numbers are **1-based** in Fiji and terminal commands. CSV rows and columns follow the TIFF stack order.
 
-## Can I use `-1` entries in a SpillOT CSV?
 
-Yes. SpillOT accepts both `1` and `-1` as active entries. The Fiji UI writes new checked entries as `1`.
-
-## What happens to blank CSV cells?
-
-Blank cells are ignored. They are equivalent to `0` for SpillOT.
 
 ## Where is my conda environment installed?
 
