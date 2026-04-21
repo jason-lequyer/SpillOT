@@ -97,7 +97,7 @@ Help → Refresh Menus
 
    In this menu, the selected target channel is shown on the left, and candidate spillover/source channels are shown on the right. Check any channel that may be contributing spillover into the selected target. SpillOT will remove checked channels from that target only where the structural patch-similarity logic detects a local match.
 
-5. Enter settings. Patch size must be an even integer greater than or equal to 4. The default is `16` and this usally works well. Smaller patch sizes are usually more aggressive and faster. Larger patch sizes are for slower and more gentle correction. The ignore overexposed checkbox is rarely needed, but can be useful when saturated pixels are causing artefacts.
+5. Enter settings. Patch size must be an even integer greater than or equal to 4. The default is `16` and this usally works well. Smaller patch sizes lead to faster and more aggressive decontamination. Larger patch sizes lead to slower and more gentle correction. The ignore overexposed checkbox is rarely needed, but can be useful when saturated pixels are causing artefacts.
 
    The dialog also asks for the path to the `spillot` conda environment. The plugin tries to prefill this. If the field is blank, paste the full path to your `spillot` environment. See the FAQ for examples.
 
