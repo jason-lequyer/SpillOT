@@ -1,6 +1,6 @@
 # SpillOT
 
-Highly multiplexed imaging techniques are widely used to study tissue architecture, cell states, and cell-cell interactions, but they can suffer from channel spillover and noise. **SpillOT** is a spillover-removal and denoising toolkit. The Fiji/ImageJ + Python plugin provides user-guided removal of suspected spillover in highly multiplexed image stacks.
+Highly multiplexed imaging techniques are widely used to study tissue architecture, cell states, and cell-cell interactions, but they can suffer from channel spillover and noise. **SpillOT** is a spillover-removal and denoising toolkit. Available as both a Fiji and python script, SpillOT provides user-guided removal of suspected spillover in highly multiplexed image stacks.
 
 Unlike ordinary linear compensation, SpillOT does not simply subtract one channel globally from another. Instead, the user specifies which channels may be spilling into which target channels, and SpillOT removes signal only where its structural patch-similarity logic detects matching local image structure.
 
@@ -27,7 +27,7 @@ Unlike ordinary linear compensation, SpillOT does not simply subtract one channe
 
 # Fiji plugin
 
-SpillOT is intended for cases where the user knows, or wants to specify, which channels are plausible sources of bleed-through into each target channel. For example, if signal from `Ki67` appears to spill into `CD8`, the user can mark `Ki67` as a channel to remove from `CD8`. SpillOT will then remove `Ki67`-like signal from `CD8` only in image patches where the structural patch-similarity detector flags a match.
+Our first plugin is intended for cases where the user knows, or wants to specify, which channels are plausible sources of bleed-through into each target channel. For example, if signal from `Ki67` appears to spill into `CD8`, the user can mark `Ki67` as a channel to remove from `CD8`. SpillOT will then remove `Ki67`-like signal from `CD8` only in image patches where the structural patch-similarity detector flags a match.
 
 ## Quick start
 
@@ -99,57 +99,14 @@ Help → Refresh Menus
 
 5. Enter run settings.
 
-   The most important setting is:
 
-   - **Patch size**: must be an even integer greater than or equal to 4. The default is `16`. Smaller patch sizes are usually more aggressive and faster. Larger patch sizes can be gentler and may sometimes improve results for larger structures.
+**Patch size**: must be an even integer greater than or equal to 4. The default is `16` and this usally works well. Smaller patch sizes are usually more aggressive and faster. Larger patch sizes are for slower and more gentle correction.
 
    The dialog also asks for the path to the `spillot` conda environment. The plugin tries to prefill this. If the field is blank, paste the full path to your `spillot` environment. See the FAQ for examples.
 
 6. Click **OK** to start.
 
 A progress window will show elapsed time while channels are processed.
-
----
-
-## Manual spillover CSV
-
-SpillOT uses a manual spillover matrix to record which source channels should be considered for removal from each target channel.
-
-The matrix convention is:
-
-```text
-row    = target channel to clean
-column = channel suspected of bleeding/spilling into that target
-1      = remove this column channel from this row channel where patches match
-```
-
-Channel names in the header row and first column are optional. If names are included, SpillOT will use them when possible. If names are left blank, the matrix is interpreted by order: the first data row is channel 1, the second data row is channel 2, and so on, with columns following the same channel order.
-
-For example:
-
-```csv
-,HLA-ABC,CD57,CD31,Ki67
-HLA-ABC,,1,,
-CD57,,,,
-CD31,,,,1
-Ki67,,,,
-```
-
-The same matrix can also be written without channel names if you prefer to rely only on channel order:
-
-```csv
-,,,,
-,,1,,
-,,,,
-,,,,1
-,,,,
-```
-
-This means:
-
-- remove `CD57` from `HLA-ABC` wherever SpillOT detects structurally similar patches;
-- remove `Ki67` from `CD31` wherever SpillOT detects structurally similar patches;
-- leave channel pairs that are not marked with `1` unchanged.
 
 ---
 
@@ -206,8 +163,45 @@ To process all channels, omit the channel number:
 ```bash
 python plugins/SpillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif
 ```
+### Manual spillover CSV
 
-### Providing a CSV manually
+SpillOT uses a manual spillover matrix to record which source channels should be considered for removal from each target channel.
+
+The matrix convention is:
+
+```text
+row    = target channel to clean
+column = channel suspected of bleeding/spilling into that target
+1      = remove this column's channel from this row's channel where patches match
+```
+
+Channel names in the header row and first column are optional. If names are included, SpillOT will use them when possible. If names are left blank, the matrix is interpreted by order: the first data row is channel 1, the second data row is channel 2, and so on, with columns following the same channel order.
+
+For example:
+
+```csv
+,HLA-ABC,CD57,CD31,Ki67
+HLA-ABC,,1,,
+CD57,,,,
+CD31,,,,1
+Ki67,,,,
+```
+
+The same matrix can also be written without channel names if you prefer to rely only on channel order:
+
+```csv
+,,,,
+,,1,,
+,,,,
+,,,,1
+,,,,
+```
+
+This means:
+
+- remove `CD57` from `HLA-ABC` wherever SpillOT detects structurally similar patches;
+- remove `Ki67` from `CD31` wherever SpillOT detects structurally similar patches;
+- leave channel pairs that are not marked with `1` unchanged.
 
 By default, SpillOT looks for a same-name CSV next to the input TIFF:
 
@@ -222,6 +216,8 @@ python plugins/SpillOT/SpillOT.py <path/to/stack.tif> 21 --csv <path/to/spillove
 ```
 
 The aliases `--manual_csv` and `--manual-csv` are also accepted.
+
+As an alaternative to manually creating a csv, going through the first three menus of our Fiji plugin will auto generate a properly formatted csv with your channel speicfications, and save it next to your image stack, which can then be read by the cluster script.
 
 ### Patch size
 
@@ -247,7 +243,7 @@ To set saturated pixels to zero before processing and inpaint them afterward:
 python plugins/SpillOT/SpillOT.py <path/to/stack.tif> 21 --ignore_overexposed
 ```
 
-This is rarely needed, but can be useful when saturated pixels are causing artifacts.
+This is rarely needed, but can be useful when saturated pixels are causing artefacts.
 
 ---
 
