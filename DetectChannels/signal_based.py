@@ -675,12 +675,22 @@ if __name__ == "__main__":
     # IMPORTANT: Allocate output in the ORIGINAL dtype and shape
     outstack = np.empty_like(raw_orig)
 
-    # optional CSV inclusion mask (read once)
+    # optional CSV inclusion/exclusion mask (read once)
+    # Legacy DetectChannels matrix semantics:
+    #   1 or -1 => keep / allow comparison
+    #   0, blank, NaN, or any other value => exclude / veto comparison
     mask_matrix = None
     try:
         csv_path = os.path.splitext(file_name)[0] + ".csv"
-        mask_matrix = np.genfromtxt(csv_path, delimiter=",", skip_header=1)[:, 1:]
-        mask_matrix = np.nan_to_num(mask_matrix, nan=1)
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            mask_matrix = np.genfromtxt(
+                f,
+                delimiter=",",
+                skip_header=1,
+                usecols=tuple(range(1, n_chan + 1)),
+            )
+        mask_matrix = np.atleast_2d(mask_matrix).astype(np.float32, copy=False)
+        mask_matrix[np.isnan(mask_matrix)] = 0.0
     except Exception as e:
         print("CSV not found or unusable:", e, "\nProceeding without mask.")
 
@@ -700,15 +710,16 @@ if __name__ == "__main__":
         included = None
         if mask_matrix is not None:
             row = mask_matrix[oz]
-            # channels with value 1 are allowed donors
-            included = np.where(np.isclose(row, 1, atol=1e-6))[0]
+            # Only explicit +1/-1 cells are allowed donor/comparison channels.
+            # 0, blanks/NaNs, and other numeric values are excluded/vetoed.
+            included = np.where(np.isclose(np.abs(row), 1.0, rtol=0.0, atol=1e-6))[0]
 
             # never use the channel itself as a donor, even if the CSV says 1
             included = included[included != oz]
 
             if included.size == 0:
                 # No allowed donors for this channel -> skip debleeding
-                print("Mask row for channel {} has no allowed donors (all 0s or only self); "
+                print("Mask row for channel {} has no allowed donors (no explicit +1/-1 allowed channels, or only self); "
                       "skipping debleed for this channel."
                       .format(oz + 1))
                 # Leave this channel exactly as the original data
