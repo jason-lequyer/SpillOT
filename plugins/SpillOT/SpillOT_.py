@@ -22,7 +22,7 @@ try:
                           GridLayout, FlowLayout, Insets, Font, Color, BasicStroke,
                           RenderingHints, Cursor)
     from java.awt.event import ActionListener, ComponentAdapter, MouseAdapter
-    from java.lang import System as JSystem, Runnable
+    from java.lang import System as JSystem, Runnable, Runtime
 
     paths = []
 
@@ -142,6 +142,29 @@ try:
         env.setdefault("OMP_NUM_THREADS", "1")
         env.setdefault("MKL_NUM_THREADS", "1")
         return env
+
+    def _available_cpu_count():
+        try:
+            return max(1, int(Runtime.getRuntime().availableProcessors()))
+        except Exception:
+            try:
+                return max(1, int(os.cpu_count() or 1))
+            except Exception:
+                return 1
+
+    def _patch_count_for_size(pat):
+        try:
+            pat = int(pat)
+            # This matches the backend patch count after reflect padding and
+            # unfolding with a (patsize+4) kernel: (H-p+1) * (W-p+1).
+            hh = max(1, int(imp.getHeight()) - pat + 1)
+            ww = max(1, int(imp.getWidth())  - pat + 1)
+            return max(1, hh * ww)
+        except Exception:
+            return 1
+
+    def _default_worker_count_for_patsize(pat):
+        return max(1, min(_available_cpu_count(), _patch_count_for_size(pat)))
 
     def _guess_conda_env_root(env_name="rfot"):
         try:
@@ -1463,7 +1486,9 @@ try:
     # ---------------------------------------------------------------------
     # Run parameters dialog (planes already selected up front)
     # ---------------------------------------------------------------------
-    _prefilled_env = _guess_conda_env_root("rfot")
+    _prefilled_env = _guess_conda_env_root("spillot") or _guess_conda_env_root("rfot")
+    _default_patsize = 16
+    _default_workers = _default_worker_count_for_patsize(_default_patsize)
 
     dlg = GenericDialog("Run SpillOT")
     dlg.addMessage(
@@ -1471,10 +1496,15 @@ try:
         "- Must be an EVEN integer >= 4.\n"
         "- Lower values -> more aggressive removal and faster runs.\n"
         "\n"
+        "Number of worker processes controls parallel patch processing.\n"
+        "- Reduce this if you run into out-of-memory problems.\n"
+        "- Increase it for speed on machines with enough RAM.\n"
+        "\n"
         "Optionally, ignore overexposed pixels by setting saturated pixels to 0."
     )
-    dlg.addNumericField("Patch size (patsize):", 16, 0)
-    dlg.addStringField("Conda env path (root of env, e.g. .../envs/rfot):", _prefilled_env or "", 50)
+    dlg.addNumericField("Patch size (patsize):", _default_patsize, 0)
+    dlg.addNumericField("Number of worker processes:", _default_workers, 0)
+    dlg.addStringField("Conda env path (root of env, e.g. .../envs/spillot):", _prefilled_env or "", 50)
     dlg.addCheckbox("Ignore overexposed pixels (set saturated to 0)", False)
 
     dlg.showDialog()
@@ -1482,6 +1512,7 @@ try:
         sys.exit()
 
     patsize = int(round(dlg.getNextNumber()))
+    workers = int(round(dlg.getNextNumber()))
     env_root = dlg.getNextString().strip()
     ignore_overexposed = dlg.getNextBoolean()
 
@@ -1490,15 +1521,20 @@ try:
                        "Patch size must be an EVEN integer >= 4.\nYou entered: %s." % patsize)
         sys.exit()
 
+    if workers < 1:
+        IJ.showMessage("Invalid worker count",
+                       "Number of worker processes must be an integer >= 1.\nYou entered: %s." % workers)
+        sys.exit()
+
     if not env_root:
-        env_root = _guess_conda_env_root("rfot")
+        env_root = _guess_conda_env_root("spillot") or _guess_conda_env_root("rfot")
     if not env_root:
         IJ.showMessage("Conda env missing",
-                       "Couldn't find a conda env named 'rfot'. Please paste the full path to your env.\n"
+                       "Couldn't find a conda env named 'spillot'. Please paste the full path to your env.\n"
                        "Examples:\n"
-                       "  Windows:  C:\\Users\\<you>\\miniconda3\\envs\\rfot\n"
-                       "  Linux:    /home/<you>/mambaforge/envs/rfot\n"
-                       "  macOS:    /opt/anaconda3/envs/rfot  (or)  /Users/<you>/miniforge3/envs/rfot")
+                       "  Windows:  C:\\Users\\<you>\\miniconda3\\envs\\spillot\n"
+                       "  Linux:    /home/<you>/mambaforge/envs/spillot\n"
+                       "  macOS:    /opt/anaconda3/envs/spillot  (or)  /Users/<you>/miniforge3/envs/spillot")
         sys.exit()
 
     pyexe = _python_from_env(env_root)
@@ -1602,7 +1638,8 @@ try:
                 wait_bar.repaint()
 
             cmd = [pyexe, runner_py, img_path, str(ch), "--patsize", str(patsize),
-                   "--manual_csv", manual_csv_path]
+                   "--manual_csv", manual_csv_path,
+                   "--workers", str(workers)]
             if ignore_overexposed:
                 cmd.append("--ignore_overexposed")
 

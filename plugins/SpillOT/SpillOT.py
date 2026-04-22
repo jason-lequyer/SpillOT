@@ -63,12 +63,14 @@ def _init_compare_pool(_compare3d, _base_flat, _basediff, _pat, _base_min_nz,
                        _dropout_weights, _dropout_support_counts,
                        _dropout_robust, _dropout_zero_weight,
                        _min_signal_pixels, _dropout_tolerance,
-                       _core_gate, _core_fraction, _min_core_overlap):
+                       _core_gate, _core_fraction, _min_core_overlap,
+                       _source_contrast_gate, _min_source_to_target_range_ratio):
     global compare3d, rf
     global basediff, RP, unfold, patsize, base_min_nz
     global dropout_weights, dropout_support_counts
     global dropout_robust, dropout_zero_weight, min_signal_pixels, dropout_tolerance
     global core_gate, core_fraction, min_core_overlap
+    global source_contrast_gate, min_source_to_target_range_ratio
     compare3d   = _compare3d                 # (1,C,H,W), only the user-selected donor channels
     rf          = _base_flat                 # base/target patches, flattened as (N, P)
     basediff    = _basediff                  # dynamic per-patch similarity threshold, shape (P,)
@@ -83,6 +85,8 @@ def _init_compare_pool(_compare3d, _base_flat, _basediff, _pat, _base_min_nz,
     core_gate = bool(_core_gate)
     core_fraction = np.float32(_core_fraction)
     min_core_overlap = np.float32(_min_core_overlap)
+    source_contrast_gate = bool(_source_contrast_gate)
+    min_source_to_target_range_ratio = np.float32(_min_source_to_target_range_ratio)
     RP, unfold  = RP_pad2, unfold_p16
 
 # ───────────────────────────── helper functions ────────────────────────────────
@@ -226,6 +230,16 @@ DEFAULT_DROPOUT_TOLERANCE = 1.25
 DEFAULT_CORE_GATE = True
 DEFAULT_CORE_FRACTION = 0.20
 DEFAULT_MIN_CORE_OVERLAP = 0.60
+
+# Extra anti-false-positive guard. Local brightness normalization can scale a
+# very low-contrast source/background patch up to match a much higher-contrast
+# target patch. That is a common false-positive mode for broad smooth signal.
+# Require the selected source channel to have at least a small fraction of the
+# target patch's raw dynamic range before it is allowed to remove that target
+# patch. True spillover source channels are usually at least this structured/
+# contrasted relative to the dimmer spillover target.
+DEFAULT_SOURCE_CONTRAST_GATE = True
+DEFAULT_MIN_SOURCE_TO_TARGET_RANGE_RATIO = 0.10
 
 
 def _set_patsize(p):
@@ -377,12 +391,24 @@ def _process_compare_channel(ow: int) -> np.ndarray:
     else:
         core_ok = np.ones(P, dtype=bool)
 
+    # Additional source/background guard. This prevents a nearly flat or very
+    # low-contrast selected source channel from being scaled up by the local
+    # brightness normalization and then removing a much higher-contrast target
+    # patch. The check is intentionally simple and scale-free: compare raw
+    # within-patch dynamic ranges before any baseline shift or normalization.
+    if source_contrast_gate and (min_source_to_target_range_ratio > 0):
+        base_range = (base_flat.max(axis=0) - base_flat.min(axis=0)).astype(np.float32)
+        cur_range  = (cur_flat.max(axis=0)  - cur_flat.min(axis=0)).astype(np.float32)
+        contrast_ok = cur_range >= (np.float32(min_source_to_target_range_ratio) * base_range)
+    else:
+        contrast_ok = np.ones(P, dtype=bool)
+
     # Manual subtraction supplies the direction. Therefore there is no
     # local-extrema or brighter/darker true-signal tie-break here: a donor
     # patch is removed only when it is structurally close enough to the target
     # under the target's own domino-derived tolerance, and, in dropout mode,
     # when the selected donor also explains the target's bright core.
-    whurdif = np.where(enough_signal & core_ok & (compdiff < threshold))[0]
+    whurdif = np.where(enough_signal & core_ok & contrast_ok & (compdiff < threshold))[0]
     return whurdif
 
 def _solve_one_plane(hj: int):
@@ -561,6 +587,8 @@ if __name__ == "__main__":
                         help="If set, pixels saturated at dtype max in the base or any compared channels are zeroed before processing (per run), then inpainted afterward.")
     parser.add_argument("--manual_csv", "--manual-csv", "--csv", dest="manual_csv", default=None,
                         help="Optional SpillOT/manual spillover CSV. If omitted, uses <image>.csv when present; otherwise uses an empty matrix. Only entries equal to 1 or -1 are treated as remove-this-column-from-this-row; 0, blanks, NaN, and other numbers are ignored.")
+    parser.add_argument("-w", "--workers", type=int, default=1,
+                        help="Number of worker processes for patch solving/comparison (default: 1). Increase for speed on machines with enough RAM; reduce if out-of-memory errors occur.")
 
     args = parser.parse_args()
 
@@ -568,6 +596,9 @@ if __name__ == "__main__":
     single_chan = (args.channel - 1) if args.channel is not None else None
     _set_patsize(args.patsize)
     ignore_overexposed = bool(args.ignore_overexposed)
+    requested_workers = int(args.workers)
+    if requested_workers < 1:
+        parser.error("--workers must be an integer >= 1")
 
     # Hard-baked SpillOT similarity settings. These are intentionally
     # not exposed in the Fiji launcher.
@@ -578,6 +609,8 @@ if __name__ == "__main__":
     core_gate = DEFAULT_CORE_GATE
     core_fraction = DEFAULT_CORE_FRACTION
     min_core_overlap = DEFAULT_MIN_CORE_OVERLAP
+    source_contrast_gate = DEFAULT_SOURCE_CONTRAST_GATE
+    min_source_to_target_range_ratio = DEFAULT_MIN_SOURCE_TO_TARGET_RANGE_RATIO
 
     # argparse handles both old positional-only calls and the new optional CSV argument.
     # Avoid reading sys.argv manually here, because optional arguments may appear before
@@ -690,6 +723,11 @@ if __name__ == "__main__":
                 core_fraction, min_core_overlap))
         else:
             print("Bright-core overlap guard: OFF")
+        if source_contrast_gate and min_source_to_target_range_ratio > 0:
+            print("Source-contrast guard: ON (min_source_to_target_range_ratio={})".format(
+                min_source_to_target_range_ratio))
+        else:
+            print("Source-contrast guard: OFF")
     else:
         print("Dropout-robust similarity: OFF (strict all-pixels L1)")
 
@@ -825,7 +863,8 @@ if __name__ == "__main__":
         cn_idx   = _where(cn == 1)
         bord_idx = _where(bord == 1)
 
-        N_WORKERS = min(os.cpu_count() or 1, base2d.shape[-1])
+        N_WORKERS = max(1, min(requested_workers, int(base2d.shape[-1])))
+        print("Using {} worker process(es) for patch operations.".format(N_WORKERS))
 
         shm_base2d, base2d = _to_shm(base2d)     # view overwrites local base2d
         shm_rf,     rf     = _to_shm(rf)
@@ -921,7 +960,8 @@ if __name__ == "__main__":
                           dropout_weights, dropout_support_counts,
                           dropout_robust, dropout_zero_weight,
                           min_signal_pixels, dropout_tolerance,
-                          core_gate, core_fraction, min_core_overlap)
+                          core_gate, core_fraction, min_core_overlap,
+                          source_contrast_gate, min_source_to_target_range_ratio)
         ) as pool:
             for whurdif in pool.map(_process_compare_channel,
                                     range(compare3d.shape[1])):
