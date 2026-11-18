@@ -1,4 +1,4 @@
-# SpillOT
+<h1><img src="assets/logo.png" alt="SpillOT" width="306"></h1>
 
 Highly multiplexed imaging techniques are widely used to study tissue architecture, cell states, and cell-cell interactions, but they can suffer from channel spillover and noise. **SpillOT** is a spillover-removal and denoising toolkit. Available as both a Fiji and python script, SpillOT provides user-guided removal of suspected spillover in highly multiplexed image stacks.
 
