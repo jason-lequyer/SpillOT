@@ -8,6 +8,8 @@ Highly multiplexed imaging techniques are widely used to study tissue architectu
 
 Unlike ordinary linear compensation, SpillOT does not simply subtract one channel globally from another. Instead, the user specifies which channels may be spilling into which target channels, and SpillOT removes signal only where its structural patch-similarity logic detects matching local image structure.
 
+![Original CD8 image, denoised image, and image after denoising and spillover correction.](gitfig.png)
+
 ## Contents
 
 - [Fiji plugin](#fiji-plugin)
