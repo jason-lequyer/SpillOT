@@ -39,47 +39,6 @@ Requires **QuPath 0.7.0 or later**.
 When the run finishes the cleaned image is added to the open project (or offered for opening in
 the viewer if there is no project) with the original channel names and colours.
 
-## Automatic memory management
-
-Tile size and patch size are different settings. **Patch size stays at 24** unless
-you change it. Each tile includes the context needed by patches that cross its
-boundary, and results are written back to their original positions. Global channel
-offsets and intensity ranges are shared across tiles. All channels and the full
-selected region are retained in the output, including channels you did not clean.
-
-Tiles are processed in sequence. The backend limits its patch batches and worker
-count to fit the estimated RAM budget, so the requested worker count is an upper
-limit. The chosen settings are recorded in the run log. Memory
-estimates leave headroom for QuPath and the operating system, but other applications
-can still change how much memory is available during a run.
-
-The automatic budget is **75% of available RAM at startup, with no fixed GiB
-ceiling**. It scales to larger workstations as well as laptops. The planner uses
-that budget to choose its working sizes and worker count; it does not allocate
-unused memory just to fill the budget or continuously resize during a run.
-
-Temporary files are stored on disk, and the extension checks free disk space before
-exporting. Large slides therefore need substantial free disk space even when RAM
-use is bounded. Successful outputs are published after processing and saving have
-finished; cancellation removes the run's temporary files.
-
-Tiling saves memory; it does not eliminate the work of comparing every overlapping
-patch. Large regions can still take hours and whole slides can take much longer,
-especially when many target channels are selected. Use the ETA from your own data
-to judge the expected run time. Initial estimates can change as different tissue
-regions or target channels are processed.
-
-The patch solver uses random assignments. The tiled runner uses a seed tied to each
-global patch coordinate so tile scheduling does not introduce new random choices
-at boundaries. It does not reproduce an arbitrary previous unseeded run exactly.
-Small regression fixtures compare tiled output against the original backend with
-matched seeds, including tile edges and corners.
-
-**Ignore overexposed pixels** remains available. Saturated pixels are handled using
-global neighboring signal, rather than a fixed tile halo. If the full nearest-neighbor
-index would exceed the memory budget, a bounded search is used and logged. Equally
-distant neighbors may be selected differently in that fallback.
-
 ## Outputs
 
 Written to the output folder (default: a `SpillOT` folder in the project or next to the image):
