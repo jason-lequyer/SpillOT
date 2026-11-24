@@ -118,7 +118,6 @@ SpillOT compares every overlapping patch in the image, so RAM use grows with bot
 | 20 | 3.0 | 13 | 52 | 210 |
 | 24 (default) | 4.1 | 18 | 73 | 298 |
 
-These values are interpolated from a fit to measurements on Linux with the IMC example data (35-channel float32 stack, mirror-tiled to sizes from 200 x 200 px to 2000 x 2000 px, patch sizes 8 to 32). The fit matched every measurement to within 5%.
 
 For other sizes, a good rule of thumb is:
 
@@ -126,7 +125,7 @@ For other sizes, a good rule of thumb is:
 peak RAM in GB ≈ patch size² x megapixels / 8
 ```
 
-For example, patch size 24 on a 1000 x 1000 px image needs about 24 x 24 x 1 / 8 = 72 GB. The rule slightly overestimates for images that are only a few times larger than the patch.
+For example, patch size 24 on a 1000 x 1000 px image needs about 24 x 24 x 1 / 8 = 72 GB. 
 
 Things that change these numbers:
 
