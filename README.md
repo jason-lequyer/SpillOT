@@ -13,11 +13,13 @@ Unlike ordinary linear compensation, SpillOT does not simply subtract one channe
 - [Fiji plugin](#fiji-plugin)
   - [Quick start](#quick-start)
   - [How to run SpillOT in Fiji](#how-to-run-spillot-in-fiji)
-  - [Memory (RAM) requirements](#memory-ram-requirements)
-  - [Manual spillover CSV](#manual-spillover-csv)
   - [Outputs](#outputs)
-  - [Command-line use](#command-line-use-terminal--cluster)
   - [Opal / Vectra export note](#opal--vectra-export-note)
+- [Cluster use](#cluster-use)
+  - [Basic terminal usage](#basic-terminal-usage)
+  - [Manual spillover CSV](#manual-spillover-csv)
+  - [Patch size](#patch-size)
+  - [Ignore overexposed pixels](#ignore-overexposed-pixels)
 - [QuPath extension](#qupath-extension)
 - [Denoiser](#denoiser)
   - [Multi-channel data](#multi-channel-data)
@@ -103,7 +105,7 @@ Help → Refresh Menus
 
 6. Click **OK** to start.
 
-A progress window will show elapsed time while channels are processed.
+A progress window shows elapsed time, progress, and an ETA while channels are processed.
 
 ---
 
@@ -125,19 +127,45 @@ It also writes a full replacement stack:
 
 The full-stack output is the original stack with selected channels replaced by their SpillOT-cleaned versions. Channels not selected for cleaning are left unchanged.
 
-The output datatype is matched back to the input datatype when possible, and outputs are ImageJ-compatible TIFFs.
+Outputs preserve the input datatype and are saved as OME-TIFFs. Fiji opens the result as a virtual stack through Bio-Formats.
 
 ---
 
-## Command-line use: terminal / cluster
+## Opal / Vectra export note
 
-SpillOT can also be run outside Fiji, for example on a workstation or compute cluster. Use the same backend runner that Fiji calls:
+SpillOT expects input as a TIFF stack where each slice is one marker/channel.
+
+If your data starts as an Opal/Vectra `.mif`, we recommend exporting unmixed component/composite images from inForm using these settings:
+
+- **Select Reported Units**: **Normalized for Exposure**
+- **Weighting**: **Total**
+
+![inForm “Component Units” settings](inform_component_units.png)
+
+Make sure you export unmixed component channels, not an RGB-rendered image. Depending on your inForm export, you may get either:
+
+- one multi-page TIFF / stack, or
+- one TIFF per channel.
+
+If you get one TIFF per channel, stack them in Fiji using:
+
+```text
+Image → Stacks → Images to Stack…
+```
+
+Make sure the channel order matches the row/column order of any CSV matrix you use.
+
+---
+
+# Cluster use
+
+Run SpillOT from the command line on a workstation or compute cluster using the standalone runner:
 
 ```text
 plugins/SpillOT/SpillOT.py
 ```
 
-### Basic terminal usage
+## Basic terminal usage
 
 From the repository root:
 
@@ -160,7 +188,7 @@ To process all channels, omit the channel number:
 ```bash
 python plugins/SpillOT/SpillOT.py IMC_smallcrop/IMC_smallcrop.tif
 ```
-### Manual spillover CSV
+## Manual spillover CSV
 
 SpillOT uses a manual spillover matrix to record which source channels should be considered for removal from each target channel.
 
@@ -216,7 +244,7 @@ The aliases `--manual_csv` and `--manual-csv` are also accepted.
 
 As an alaternative to manually creating a csv, going through the first three menus of our Fiji plugin will auto generate a properly formatted csv with your channel speicfications, and save it next to your image stack, which can then be read by the cluster script.
 
-### Patch size
+## Patch size
 
 Set patch size with:
 
@@ -232,7 +260,7 @@ python plugins/SpillOT/SpillOT.py <path/to/stack.tif> 21 -p 12
 
 Patch size must be an even integer greater than or equal to 4. The default is `24`. If `24` doesn't remove all spillover, try `16`. 
 
-### Ignore overexposed pixels
+## Ignore overexposed pixels
 
 To set saturated pixels to zero before processing and inpaint them afterward:
 
@@ -244,41 +272,15 @@ This is rarely needed, but can be useful when saturated pixels are causing artef
 
 ---
 
-## Opal / Vectra export note
-
-SpillOT expects input as a TIFF stack where each slice is one marker/channel.
-
-If your data starts as an Opal/Vectra `.mif`, we recommend exporting unmixed component/composite images from inForm using these settings:
-
-- **Select Reported Units**: **Normalized for Exposure**
-- **Weighting**: **Total**
-
-![inForm “Component Units” settings](inform_component_units.png)
-
-Make sure you export unmixed component channels, not an RGB-rendered image. Depending on your inForm export, you may get either:
-
-- one multi-page TIFF / stack, or
-- one TIFF per channel.
-
-If you get one TIFF per channel, stack them in Fiji using:
-
-```text
-Image → Stacks → Images to Stack…
-```
-
-Make sure the channel order matches the row/column order of any CSV matrix you use.
-
----
-
 # QuPath extension
 
 SpillOT is also available as a QuPath extension (QuPath 0.7.0 or later). It uses the same SpillOT patch comparison algorithm and the same `spillot` conda environment as the Fiji plugin.
 
 1. Create the `spillot` conda environment as described in the [Fiji quick start](#quick-start).
-2. Download [qupath-extension-spillot-0.2.1.jar](qupath-extension-spillot-0.2.1.jar), drag it onto the QuPath window, and restart QuPath. Remove an older SpillOT extension jar before installing the update.
+2. Download [qupath-extension-spillot-0.2.2.jar](qupath-extension-spillot-0.2.2.jar), drag it onto the QuPath window, and restart QuPath. Remove an older SpillOT extension jar before installing the update.
 3. Open a multiplexed image. For whole-slide images, draw and select an annotation around the area to clean.
 4. Run **Extensions → SpillOT → Run SpillOT...**
-5. Leave **Tile to save memory** checked to divide the selected region into automatic processing tiles. Tile size adapts to available RAM; patch size stays at `24` unless you change it. The window shows progress and an ETA after processing has warmed up. The result keeps the full selected region and its channels.
+5. Select the target channels and suspected spillover sources, then click **Run**. Memory use adjusts automatically, and the window shows progress and an ETA.
 
 See [qupath-extension-spillot/README.md](qupath-extension-spillot/README.md) for details, scripting, and build instructions.
 

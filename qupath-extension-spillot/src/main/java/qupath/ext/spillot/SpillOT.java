@@ -11,9 +11,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import ij.ImagePlus;
 import ij.ImageStack;
-import ij.io.FileSaver;
-import ij.io.Opener;
-import ij.process.ImageProcessor;
 import qupath.imagej.tools.IJTools;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelType;
@@ -57,10 +54,9 @@ import java.util.function.Consumer;
 /**
  * GUI-free core of the SpillOT QuPath extension.
  * <p>
- * By default it streams the selected region through bounded export tiles and a memory-budgeted
- * Python runner. The original full-stack workflow remains available through
- * {@link Params#tileToSaveMemory}. Both workflows write the input image, spillover CSV,
- * cleaned channels and a full replacement stack.
+ * Streams the selected region through bounded export tiles and a memory-budgeted
+ * Python runner. It writes the input image, spillover CSV, cleaned channels and
+ * a full replacement stack.
  * <p>
  * Everything here can also be called from a QuPath script, e.g.
  * <pre>{@code
@@ -87,8 +83,6 @@ public final class SpillOT {
         public int patchSize = DEFAULT_PATCH_SIZE;
         /** Worker processes used by the Python backend. */
         public int workers = Math.max(1, Runtime.getRuntime().availableProcessors());
-        /** Stream the selected region through bounded tiles instead of loading a full stack. */
-        public boolean tileToSaveMemory = true;
         /** Python working-memory budget in MB; zero lets the backend choose from available RAM. */
         public int memoryBudgetMB = 0;
         /** Root of the conda environment (e.g. .../envs/spillot). */
@@ -107,7 +101,7 @@ public final class SpillOT {
 
     /** Files written by a run. */
     public static class Result {
-        /** Exported input stack (OME-TIFF in low-memory mode; ImageJ TIFF in legacy mode). */
+        /** Exported input stack (OME-TIFF). */
         public Path input;
         /** Spillover matrix (row = target, column = source, 1 = remove where similar). */
         public Path csv;
@@ -214,87 +208,13 @@ public final class SpillOT {
         result.csv = p.outputDir.resolve(p.baseName + ".csv");
         result.fullStack = p.outputDir.resolve(p.baseName + "_SpillOT.tif");
 
-        if (p.tileToSaveMemory) {
-            if (server.getPixelType() != PixelType.UINT8 && server.getPixelType() != PixelType.UINT16
-                    && server.getPixelType() != PixelType.FLOAT32)
-                throw new IllegalArgumentException("Tile to save memory supports uint8, uint16 and float32 images. "
-                        + "This image is " + server.getPixelType() + ". Convert a copy explicitly to a supported pixel type "
-                        + "before running so any precision change is intentional.");
+        if (server.getPixelType() != PixelType.UINT8 && server.getPixelType() != PixelType.UINT16
+                && server.getPixelType() != PixelType.FLOAT32)
+            throw new IllegalArgumentException("SpillOT supports uint8, uint16 and float32 images. "
+                    + "This image is " + server.getPixelType() + ". Convert a copy explicitly to a supported pixel type "
+                    + "before running so any precision change is intentional.");
 
-            return runLowMemory(server, p, region, sources, python, result, out, progress, stop, detailedProgress);
-        }
-
-        // 1) Export the region at full resolution as a channel stack
-        report(detailedProgress, new Progress("export", 0, 1, 0, null, "Exporting full image stack"));
-        out.accept("Exporting " + region.getWidth() + " x " + region.getHeight() + " px, "
-                + nChannels + " channels -> " + result.input);
-        ImagePlus imp = readStack(server, region, 1.0);
-        List<String> names = channelNames(server);
-        if (!new FileSaver(imp).saveAsTiffStack(result.input.toString()))
-            throw new IOException("Could not write " + result.input);
-        checkCancelled(stop);
-        report(detailedProgress, new Progress("processing", 0, sources.size(), EXPORT_FRACTION,
-                null, "Starting channel processing; estimating remaining time"));
-
-        // 2) Spillover matrix, same convention as the Fiji plugin
-        writeCsv(result.csv, names, sources);
-
-        // 3) Python backend, one target channel at a time
-        Path runner = extractRunner();
-        int done = 0;
-        long processingStarted = System.nanoTime();
-        try {
-            for (int target : sources.keySet()) {
-                if (stop.getAsBoolean())
-                    throw new InterruptedException("SpillOT was cancelled.");
-                out.accept("");
-                out.accept("Cleaning channel " + (target + 1) + " (" + names.get(target) + "), "
-                        + (done + 1) + " of " + sources.size());
-                List<String> cmd = new ArrayList<>(List.of(
-                        python.toString(), runner.toString(), result.input.toString(),
-                        Integer.toString(target + 1),
-                        "--patsize", Integer.toString(p.patchSize),
-                        "--manual_csv", result.csv.toString(),
-                        "--workers", Integer.toString(p.workers)));
-                if (p.ignoreOverexposed)
-                    cmd.add("--ignore_overexposed");
-                runProcess(cmd, p.envPath, out, stop);
-
-                Path chanFile = p.outputDir.resolve(p.baseName + "_Channel_" + (target + 1) + "_SpillOT.tif");
-                if (!Files.exists(chanFile))
-                    throw new IOException("SpillOT result not found: " + chanFile);
-                ImagePlus cleaned = new Opener().openImage(chanFile.toString());
-                if (cleaned == null)
-                    throw new IOException("Could not read " + chanFile);
-                ImageProcessor ip = cleaned.getProcessor();
-                ImageStack stack = imp.getStack();
-                if (ip.getWidth() != stack.getWidth() || ip.getHeight() != stack.getHeight()
-                        || ip.getBitDepth() != stack.getBitDepth())
-                    throw new IOException("Unexpected size or bit depth in " + chanFile);
-                stack.setProcessor(ip, target + 1);
-                result.channels.put(target, chanFile);
-                done++;
-                if (progress != null)
-                    progress.accept(done);
-                double elapsed = (System.nanoTime() - processingStarted) / 1_000_000_000.0;
-                report(detailedProgress, new Progress("processing", done, sources.size(),
-                        EXPORT_FRACTION + 0.80 * done / sources.size(),
-                        done < sources.size() ? elapsed / done * (sources.size() - done) : null,
-                        "Cleaned " + done + " of " + sources.size() + " channels"));
-            }
-        } finally {
-            cleanupRunner(runner);
-        }
-
-        // 4) Full replacement stack (unselected channels are unchanged)
-        checkCancelled(stop);
-        report(detailedProgress, new Progress("writing", 0, 1, 0.95, null, "Writing full SpillOT stack"));
-        if (!new FileSaver(imp).saveAsTiffStack(result.fullStack.toString()))
-            throw new IOException("Could not write " + result.fullStack);
-        out.accept("");
-        out.accept("Saved full SpillOT stack -> " + result.fullStack);
-        report(detailedProgress, new Progress("done", sources.size(), sources.size(), 1, 0.0, "Finished"));
-        return result;
+        return runLowMemory(server, p, region, sources, python, result, out, progress, stop, detailedProgress);
     }
 
     private static Result runLowMemory(ImageServer<BufferedImage> server, Params p, ImageRegion region,
@@ -341,7 +261,7 @@ public final class SpillOT {
             workDir = Files.createTempDirectory(p.outputDir.toAbsolutePath(), ".spillot-work-");
             rawFile = workDir.resolve("input.raw");
             manifestFile = workDir.resolve("manifest.json");
-            out.accept("Tile to save memory: exporting " + region.getWidth() + " x " + region.getHeight()
+            out.accept("Exporting " + region.getWidth() + " x " + region.getHeight()
                     + " px, " + channels + " channels in tiles up to " + tileSide + " x " + tileSide + " px.");
             out.accept("RAM use is planned automatically; tiles run serially. Large images may still take a long time.");
             exportRaw(server, region, channels, tileSide, bitDepth, rawFile, stackBytes, firstTile,
@@ -354,7 +274,7 @@ public final class SpillOT {
             Map<String, Object> manifest = buildManifest(server, p, region, names, rawFile, stagedCsv, dtype);
             Files.writeString(manifestFile, JSON.toJson(manifest), StandardCharsets.UTF_8);
 
-            runner = extractRunner(true);
+            runner = extractRunner();
             report(detailedProgress, new Progress("planning", 0, 1, EXPORT_FRACTION, null,
                     "Planning memory use; estimating remaining time"));
             runProcess(List.of(python.toString(), runner.toString(), "--manifest", manifestFile.toString()),
@@ -824,14 +744,10 @@ public final class SpillOT {
         return "";
     }
 
-    /** Copy the bundled runners to a temporary folder and return the legacy runner. */
+    /** Copy the bundled backend files to a temporary folder and return the memory-aware runner. */
     static Path extractRunner() throws IOException {
-        return extractRunner(false);
-    }
-
-    static Path extractRunner(boolean lowMemory) throws IOException {
         Path dir = Files.createTempDirectory("spillot-qupath-");
-        Path runner = dir.resolve(lowMemory ? "SpillOT_low_memory.py" : "SpillOT.py");
+        Path runner = dir.resolve("SpillOT_low_memory.py");
         try {
             for (String name : List.of("SpillOT.py", "SpillOT_low_memory.py")) {
                 try (InputStream in = SpillOT.class.getResourceAsStream(name)) {
@@ -858,17 +774,6 @@ public final class SpillOT {
         } catch (IOException ignored) {
             // Only private temporary runner files are involved.
         }
-    }
-
-    private static void runProcess(List<String> cmd, String envRoot, Consumer<String> out,
-                                   BooleanSupplier stop) throws IOException, InterruptedException {
-        runProcess(cmd, envRoot, out, stop, null);
-    }
-
-    private static void runProcess(List<String> cmd, String envRoot, Consumer<String> out,
-                                   BooleanSupplier stop, Consumer<Progress> progress)
-            throws IOException, InterruptedException {
-        runProcess(cmd, envRoot, out, stop, progress, null);
     }
 
     private static void runProcess(List<String> cmd, String envRoot, Consumer<String> out,
@@ -994,7 +899,7 @@ public final class SpillOT {
             }
         }
         // A marker lets Python close files and roll back publication on every platform, including Windows.
-        // The legacy runner has no marker protocol; on Unix destroy requests graceful SIGTERM.
+        // If the marker cannot be written, Unix destroy still requests graceful SIGTERM.
         if (!cooperative && process.isAlive())
             process.destroy();
         boolean interrupted = false;

@@ -8,14 +8,13 @@ try:
     # ---------------------------------------------------------------------
     # Imports
     # ---------------------------------------------------------------------
-    import os, sys, tempfile, subprocess, re, time, math, codecs
-    from ij import IJ, ImagePlus, ImageStack
+    import os, sys, subprocess, re, math, imp as pyimp
+    from ij import IJ, ImagePlus
     from ij.gui import GenericDialog
-    from ij.io import Opener, FileSaver
-    from ij.plugin import ChannelSplitter
+    from ij.io import DirectoryChooser
 
     from javax.swing import (JPanel, JScrollPane,
-                             JButton, BoxLayout, JOptionPane, JLabel, JDialog, JProgressBar, Timer,
+                             JButton, BoxLayout, JOptionPane, JLabel, JDialog, Timer,
                              JCheckBox, ImageIcon, BorderFactory, SwingConstants, SwingUtilities)
     from javax.swing.border import AbstractBorder
     from java.awt import (Dimension, Toolkit, BorderLayout, GraphicsEnvironment,
@@ -23,101 +22,6 @@ try:
                           RenderingHints, Cursor)
     from java.awt.event import ActionListener, ComponentAdapter, MouseAdapter
     from java.lang import System as JSystem, Runnable, Runtime
-
-    paths = []
-
-    # ---------------------------------------------------------------------
-    # Progress dialog helpers
-    # ---------------------------------------------------------------------
-    def _fmt_elapsed(sec):
-        sec = int(max(0, sec))
-        h = sec // 3600
-        m = (sec % 3600) // 60
-        s = sec % 60
-        return ("%02d:%02d:%02d" % (h, m, s)) if h else ("%02d:%02d" % (m, s))
-
-    def _show_progress(total_channels):
-        start_ts = time.time()
-        dlg = JDialog(None, "Processing", False)  # modeless
-        dlg.setLayout(BorderLayout())
-        lbl_txt = "Processing channel" if total_channels == 1 else "Processing %d channels" % total_channels
-        dlg.add(JLabel(lbl_txt), BorderLayout.NORTH)
-        bar = JProgressBar()
-        bar.setStringPainted(False)
-        if total_channels == 1:
-            bar.setIndeterminate(True)
-        else:
-            bar.setIndeterminate(False)
-            bar.setMinimum(0)
-            bar.setMaximum(total_channels)
-            bar.setValue(0)
-        dlg.add(bar, BorderLayout.CENTER)
-        elapsed_lbl = JLabel("Elapsed: 00:00")
-        dlg.add(elapsed_lbl, BorderLayout.SOUTH)
-        dlg.setSize(300, 100)
-        dlg.setLocationRelativeTo(None)
-        dlg.setVisible(True)
-
-        class _Tick(ActionListener):
-            def actionPerformed(self, evt):
-                elapsed_lbl.setText("Elapsed: " + _fmt_elapsed(time.time() - start_ts))
-                elapsed_lbl.repaint()
-
-        t = Timer(1000, _Tick())
-        t.setRepeats(True)
-        t.start()
-        return dlg, bar, t
-
-    def _pb_smooth_to(bar, new_value, duration_ms=250):
-        if bar.isIndeterminate():
-            return
-        new_value = max(bar.getMinimum(), min(bar.getMaximum(), int(new_value)))
-        start = bar.getValue()
-        if new_value == start:
-            return
-        prev = bar.getClientProperty("pbTweenTimer")
-        if prev is not None:
-            try:
-                prev.stop()
-            except:
-                pass
-        steps = max(1, int(duration_ms / 40))
-        delta = float(new_value - start) / steps
-        state = {"i": 0, "val": float(start)}
-
-        class _Step(ActionListener):
-            def actionPerformed(self, evt):
-                state["i"] += 1
-                if state["i"] >= steps:
-                    bar.setValue(new_value)
-                    bar.repaint()
-                    try:
-                        evt.getSource().stop()
-                    except:
-                        pass
-                    bar.putClientProperty("pbTweenTimer", None)
-                    return
-                state["val"] += delta
-                bar.setValue(int(round(state["val"])))
-                bar.repaint()
-
-        timer = Timer(int(round(float(duration_ms) / steps)), _Step())
-        timer.setRepeats(True)
-        timer.start()
-        bar.putClientProperty("pbTweenTimer", timer)
-
-    def _pb_cleanup(bar, timer):
-        try:
-            timer.stop()
-        except:
-            pass
-        try:
-            t = bar.getClientProperty("pbTweenTimer")
-            if t is not None:
-                t.stop()
-                bar.putClientProperty("pbTweenTimer", None)
-        except:
-            pass
 
     # ---------------------------------------------------------------------
     # Conda env helpers (with macOS /opt/anaconda3/envs/rfot added)
@@ -255,25 +159,21 @@ try:
     except Exception:
         abort("No image is open.")
 
-    # If there are unsaved changes, prompt the user to save before running
-    if getattr(imp, "changes", False):
-        res = JOptionPane.showConfirmDialog(
-            None,
-            "The current image has unsaved changes.\n\n"
-            "Processing will save the image before running.\n"
-            "Click OK to save and continue, or Cancel to abort.",
-            "Unsaved changes",
-            JOptionPane.OK_CANCEL_OPTION,
-            JOptionPane.WARNING_MESSAGE
-        )
-        if res != JOptionPane.OK_OPTION:
-            sys.exit()
-        try:
-            fs = FileSaver(imp)
-            if not fs.save():
-                abort("Image must be saved before running.")
-        except Exception as e:
-            abort(u"Could not save the image before running.\n\n%s" % _u(e))
+    # The memory-aware bridge exports the current pixels directly, including
+    # unsaved edits, without rewriting the source image.
+    _helper_dirs = []
+    for _script_path in (globals().get("__file__", ""), sys.argv[0] if sys.argv else ""):
+        if _script_path:
+            _helper_dirs.append(os.path.dirname(os.path.abspath(_script_path)))
+    _plugins_dir = IJ.getDir("plugins")
+    if _plugins_dir:
+        for _subdir in ("SpillOT", "SpillOT/bin", "", "Debleed", "Debleed/bin"):
+            _helper_dirs.append(os.path.join(_plugins_dir, _subdir))
+    _helper_path = next((os.path.join(d, "SpillOT_fiji_memory.py") for d in _helper_dirs
+                         if os.path.isfile(os.path.join(d, "SpillOT_fiji_memory.py"))), None)
+    if not _helper_path:
+        abort("Please install the complete plugins/SpillOT folder, including SpillOT_fiji_memory.py.")
+    memory_bridge = pyimp.load_source("SpillOT_fiji_memory", _helper_path)
 
     # Keep original file path for naming outputs (even if we later temp-save for processing)
     orig_path_for_naming = u""
@@ -289,49 +189,24 @@ try:
     if _fi0 and _fi0.directory and _fi0.fileName:
         orig_path_for_naming = os.path.join(_fi0.directory, _fi0.fileName)
 
-    force_temp_save = False
-
-    # Split RGB composite with single channel to R/G/B stacks
+    # RGB conversion is virtual: only the requested plane is split in memory.
     is_rgb_color = (imp.getType() == ImagePlus.COLOR_RGB and imp.getNChannels() == 1)
     if is_rgb_color:
-        splits = ChannelSplitter.split(imp)  # [R,G,B]
-        w, h = splits[0].getWidth(), splits[0].getHeight()
-        Z = max(splits[0].getNSlices(), 1)
-        T = max(splits[0].getNFrames(), 1)
-        labels = ["Red", "Green", "Blue"]
-        stack = ImageStack(w, h)
-        for t in range(1, T + 1):
-            for z in range(1, Z + 1):
-                for ci, lab in enumerate(labels, start=1):
-                    src = splits[ci - 1]
-                    idx = src.getStackIndex(1, z, t)
-                    stack.addSlice(lab, src.getStack().getProcessor(idx))
-        imp = ImagePlus(imp.getTitle() + " (RGB split)", stack)
-        imp.setDimensions(3, Z, T)
-        imp.setOpenAsHyperStack(True)
-        force_temp_save = True
+        imp = memory_bridge.split_rgb_virtual(imp)
 
-    # Ensure TIFF path (prefer current file location)
-    fi = None
-    try:
-        fi = imp.getFileInfo()
-    except Exception:
-        fi = None
-    if (fi is None) or (not fi.directory) or (not fi.fileName):
-        try:
-            fi = imp.getOriginalFileInfo()
-        except Exception:
-            fi = None
-
-    if (not force_temp_save) and fi and fi.directory and fi.fileName:
-        img_path = os.path.join(fi.directory, fi.fileName)
+    # Saved images keep their original output location. An unsaved image needs
+    # only an output folder, not an extra full-stack TIFF export.
+    if orig_path_for_naming:
+        out_base_path = orig_path_for_naming
     else:
-        tmp = tempfile.NamedTemporaryFile(prefix="SpillOT_", suffix=".tif", delete=False)
-        img_path = tmp.name
-        IJ.saveAsTiff(imp, img_path)
-
-    # Use the original file name for outputs if available, otherwise fall back to processing path
-    out_base_path = orig_path_for_naming or img_path
+        output_dir = DirectoryChooser("SpillOT output folder").getDirectory()
+        if not output_dir:
+            sys.exit()
+        safe_title = re.sub(r'[\\/:*?"<>|]', '_', imp.getTitle()) or "SpillOT_image"
+        out_base_path = os.path.join(output_dir, safe_title)
+        if not out_base_path.lower().endswith((".tif", ".tiff")):
+            out_base_path += ".tif"
+    img_path = out_base_path  # Naming only; processing reads the active ImagePlus.
 
     # Channel axis detection
     axis_counts = {
@@ -769,12 +644,11 @@ try:
         if not os.path.exists(csv_path):
             return manual_map
         try:
-            with codecs.open(csv_path, "r", "utf-8", "replace") as f:
-                lines = [ln.strip() for ln in f if ln.strip()]
-            if not lines:
+            rows = memory_bridge.read_selection_rows(csv_path)
+            if not rows:
                 return manual_map
 
-            header = [_clean_csv_cell(c) for c in lines[0].split(u",")]
+            header = [_clean_csv_cell(c) for c in rows[0]]
             if len(header) < 2:
                 return manual_map
 
@@ -785,10 +659,10 @@ try:
                 fallback = pos if use_position_fallback_cols else None
                 col_to_idx.append(_find_channel_index_from_name(nm, names, fallback))
 
-            data_lines = lines[1:]
+            data_lines = rows[1:]
             use_position_fallback_rows = (len(data_lines) >= len(names))
             for row_pos, rline in enumerate(data_lines):
-                cells = [_clean_csv_cell(c) for c in rline.split(u",")]
+                cells = [_clean_csv_cell(c) for c in rline]
                 if len(cells) < 2:
                     continue
 
@@ -1468,20 +1342,7 @@ try:
             sys.exit()
         manual_subtractions[target_idx] = set(sorted(sel))
 
-    csv = [u"," + u",".join([_u(n) for n in names])]
-    for r in range(n_ch):
-        row = [_u(names[r])]
-        donor_set = manual_subtractions.get(r, set())
-        for c in range(n_ch):
-            if r == c:
-                row.append(u"0")
-            elif c in donor_set:
-                row.append(u"1")
-            else:
-                row.append(u"0")
-        csv.append(u",".join(row))
-    with codecs.open(manual_csv_path, "w", "utf-8") as f:
-        f.write(u"\n".join(csv))
+    memory_bridge.write_selection_csv(manual_csv_path, names, manual_subtractions)
 
     # ---------------------------------------------------------------------
     # Run parameters dialog (planes already selected up front)
@@ -1497,8 +1358,8 @@ try:
         "- Lower values -> more aggressive removal and faster runs.\n"
         "\n"
         "Number of worker processes controls parallel patch processing.\n"
-        "- Reduce this if you run into out-of-memory problems.\n"
-        "- Increase it for speed on machines with enough RAM.\n"
+        "- This is the maximum number of workers; SpillOT adjusts it to available RAM.\n"
+        "- Larger images are processed automatically in overlapping tiles.\n"
         "\n"
         "Optionally, ignore overexposed pixels by setting saturated pixels to 0."
     )
@@ -1546,237 +1407,38 @@ try:
     subproc_env = _subproc_env_for_conda_env(env_root)
 
     # ---------------------------------------------------------------------
-    # Launch runner (external Python) using the manual donor CSV
+    # Automatic memory-aware processing; shared with the QuPath extension.
     # ---------------------------------------------------------------------
-    def _this_script_dir():
-        cand_dirs = []
-        try:
-            here = globals().get("__file__", None)
-            if here:
-                cand_dirs.append(os.path.dirname(os.path.abspath(here)))
-        except Exception:
-            pass
-        try:
-            argv0 = sys.argv[0]
-            if argv0:
-                cand_dirs.append(os.path.dirname(os.path.abspath(argv0)))
-        except Exception:
-            pass
-        try:
-            plugins_dir = IJ.getDir("plugins")
-            if plugins_dir:
-                plugins_dir = os.path.abspath(plugins_dir)
-                cand_dirs.append(plugins_dir)
-                cand_dirs.append(os.path.join(plugins_dir, "SpillOT"))
-                cand_dirs.append(os.path.join(plugins_dir, "SpillOT", "bin"))
-                cand_dirs.append(os.path.join(plugins_dir, "Debleed"))
-                cand_dirs.append(os.path.join(plugins_dir, "Debleed", "bin"))
-        except Exception:
-            pass
-
-        for d in cand_dirs:
-            if d and os.path.isdir(d):
-                return d
-        return ""
-
-    def _find_runner_script():
-        runner_names = ["SpillOT.py", "spillot.py", "debleed.py"]
-        cand = []
-        here = _this_script_dir()
-        if here:
-            for runner_name in runner_names:
-                cand.append(os.path.join(here, runner_name))
-                cand.append(os.path.join(here, "bin", runner_name))
-
-        try:
-            plugins_dir = IJ.getDir("plugins")
-        except Exception:
-            plugins_dir = None
-
-        if plugins_dir:
-            plugins_dir = os.path.abspath(plugins_dir)
-            for runner_name in runner_names:
-                cand.append(os.path.join(plugins_dir, runner_name))
-                cand.append(os.path.join(plugins_dir, "SpillOT", runner_name))
-                cand.append(os.path.join(plugins_dir, "SpillOT", "bin", runner_name))
-                # Backward-compatible search paths for older installs.
-                cand.append(os.path.join(plugins_dir, "Debleed", runner_name))
-                cand.append(os.path.join(plugins_dir, "Debleed", "bin", runner_name))
-
-        seen = set()
-        for p in cand:
-            if (not p) or (p in seen):
-                continue
-            seen.add(p)
-            if os.path.exists(p):
-                return p
-        return None
-
-    runner_py = _find_runner_script()
-    if not runner_py:
-        abort("Could not find 'SpillOT.py'. Put it beside SpillOT_Run.py (or in a sibling 'bin' folder).")
-
     channels = sorted(set(int(c) for c in selected_channels))
-    if not channels:
-        abort("No channels selected for SpillOT.")
-    wait_dlg, wait_bar, wait_timer = _show_progress(len(channels))
-    if len(channels) > 1:
-        wait_bar.setIndeterminate(False)
-        wait_bar.setMinimum(0)
-        wait_bar.setMaximum(len(channels))
-        wait_bar.setValue(0)
-        wait_bar.setStringPainted(True)
-        wait_bar.setString("0 / %d (0%%)" % len(channels))
-
+    axis_indices = [slice_idx(c) for c in range(1, n_ch + 1)]
+    output_base = os.path.splitext(out_base_path)[0]
     try:
-        for i, ch in enumerate(channels, start=1):
-            IJ.showStatus("SpillOT processing channel %d of %d" % (i, len(channels)))
-            if len(channels) > 1:
-                _pb_smooth_to(wait_bar, i)
-                pct = int(round(100.0 * i / float(len(channels))))
-                wait_bar.setString("%d / %d (%d%%)" % (i, len(channels), pct))
-                wait_bar.repaint()
-
-            cmd = [pyexe, runner_py, img_path, str(ch), "--patsize", str(patsize),
-                   "--manual_csv", manual_csv_path,
-                   "--workers", str(workers)]
-            if ignore_overexposed:
-                cmd.append("--ignore_overexposed")
-
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=subproc_env)
-            stdout, stderr = proc.communicate()
-
-            if proc.returncode != 0:
-                err_msg = stderr.decode("utf-8", "replace")
-                abort(u"SpillOT runner failed for channel %d (exit %d).\n\n%s" % (ch, proc.returncode, _u(err_msg)))
-
-            # SpillOT.py writes the new suffix; keep the old suffix as a fallback for compatibility.
-            out_candidates = [
-                "%s_Channel_%d_SpillOT.tif" % (os.path.splitext(img_path)[0], ch),
-                "%s_Channel_%d_SpillOT.tif" % (img_path[:-4], ch),
-                "%s_Channel_%d_debleed.tif" % (os.path.splitext(img_path)[0], ch),
-                "%s_Channel_%d_debleed.tif" % (img_path[:-4], ch),
-            ]
-            out = None
-            for cand_out in out_candidates:
-                if cand_out and os.path.exists(cand_out):
-                    out = cand_out
-                    break
-            if out is None:
-                abort(u"SpillOT result not found for channel %d. Expected one of:\n%s" %
-                      (ch, _u(u"\n".join([_u(x) for x in out_candidates]))))
-            paths.append(out)
-    finally:
-        _pb_cleanup(wait_bar, wait_timer)
-        wait_dlg.dispose()
-        IJ.showProgress(1.0)
-        IJ.showStatus("Finished.")
-
-    # ---------------------------------------------------------------------
-    # Combine outputs into a hyperstack and attach labels with manual bleed-in selections
-    # ---------------------------------------------------------------------
-    if not paths:
-        abort("No output files generated.")
-
-    opener = Opener()
-    imps = [opener.openImage(p) for p in paths]
+        out_full, report = memory_bridge.run(
+            imp, names, axis_indices, channels, manual_subtractions, output_base,
+            os.path.dirname(_helper_path), pyexe, subproc_env, patsize, workers,
+            ignore_overexposed)
+    except memory_bridge.RunCancelled:
+        IJ.showStatus("SpillOT cancelled.")
+        sys.exit()
+    except Exception as error:
+        abort(u"SpillOT failed.\n\n%s" % _u(error))
 
     def _channel_label_with_subtractions(zero_based_idx):
         nm = _u(names[zero_based_idx])
         selected_sources = sorted(list(manual_subtractions.get(zero_based_idx, set())))
         if not selected_sources:
             return nm
-        source_txt = u", ".join([_u(names[d]) for d in selected_sources])
-        return nm + u"\nremove if similar: " + source_txt
+        return nm + u"\nremove if similar: " + u", ".join(_u(names[d]) for d in selected_sources)
 
-    if len(imps) == 1:
-        imp_single = imps[0]
-        stk_single = imp_single.getStack()
-        ch0 = channels[0] - 1
-        stk_single.setSliceLabel(_channel_label_with_subtractions(ch0), 1)
-        imp_single.updateAndDraw()
-        imp_single.show()
-    else:
-        w, h = imps[0].getWidth(), imps[0].getHeight()
-        stack = ImageStack(w, h)
-        for imp_ in imps:
-            stack.addSlice(imp_.getProcessor())
-        result = ImagePlus("SpillOT processed channels", stack)
-        result.setDimensions(len(imps), 1, 1)
-        result.setOpenAsHyperStack(True)
-        stk = result.getStack()
-        for c_idx, ch_num in enumerate(channels, start=1):
-            stk.setSliceLabel(_channel_label_with_subtractions(ch_num - 1), c_idx)
-        result.updateAndDraw()
-        result.show()
-
-    # ---------------------------------------------------------------------
-    # Build + save FULL stack with SpillOT-cleaned planes replaced (others unchanged)
-    # Saved as: <original_stack_name>_SpillOT.tif
-    # ---------------------------------------------------------------------
     try:
-        # Map original stack slice-index -> SpillOT-cleaned ImageProcessor
-        repl_by_stack_idx = {}
-        for i, ch_num in enumerate(channels):
-            try:
-                de_imp = imps[i]
-                if de_imp is None:
-                    continue
-                # duplicate to avoid sharing processor objects across stacks
-                repl_by_stack_idx[slice_idx(ch_num)] = de_imp.getProcessor().duplicate()
-            except Exception:
-                pass
-
-        orig_stack = imp.getStack()
-        full_stack = ImageStack(imp.getWidth(), imp.getHeight())
-
-        for si in range(1, imp.getStackSize() + 1):
-            lbl = orig_stack.getSliceLabel(si)
-            ip  = repl_by_stack_idx.get(si, orig_stack.getProcessor(si))
-            full_stack.addSlice(lbl, ip)
-
-        # Title for display
-        try:
-            base_title = os.path.splitext(os.path.basename(out_base_path))[0]
-        except Exception:
-            base_title = "Full SpillOT"
-        full_imp = ImagePlus(_u(base_title) + u" (SpillOT)", full_stack)
-
-        # Preserve hyperstack dims + calibration if possible
-        try:
-            full_imp.setDimensions(imp.getNChannels(), imp.getNSlices(), imp.getNFrames())
-            full_imp.setOpenAsHyperStack(True)
-        except Exception:
-            pass
-        try:
-            full_imp.setCalibration(imp.getCalibration())
-        except Exception:
-            pass
-        try:
-            info_prop = imp.getProperty("Info")
-            if info_prop:
-                full_imp.setProperty("Info", info_prop)
-        except Exception:
-            pass
-
-        full_imp.updateAndDraw()
-        full_imp.show()
-
-        out_full = os.path.splitext(out_base_path)[0] + "_SpillOT.tif"
-
-        fs = FileSaver(full_imp)
-        if full_imp.getStackSize() > 1:
-            ok = fs.saveAsTiffStack(out_full)
-        else:
-            ok = fs.saveAsTiff(out_full)
-
-        if not ok:
-            abort(u"Could not save full SpillOT stack:\n%s" % _u(out_full))
-
-        IJ.showStatus(u"Saved full SpillOT stack: " + _u(out_full))
-
-    except Exception as e:
-        abort(u"Failed building/saving the full SpillOT stack.\n\n%s" % _u(e))
+        memory_bridge.open_result_virtual(
+            out_full, imp, [slice_idx(c) for c in channels],
+            [_channel_label_with_subtractions(c - 1) for c in channels])
+    except Exception as error:
+        IJ.showMessage("SpillOT result saved", u"The completed result is saved at:\n%s\n\n"
+                       u"Open it with Bio-Formats using a virtual stack.\n%s" % (_u(out_full), _u(error)))
+    IJ.showProgress(1.0)
+    IJ.showStatus(u"Saved full SpillOT stack: " + _u(out_full))
 
 except SystemExit:
     # IMPORTANT:

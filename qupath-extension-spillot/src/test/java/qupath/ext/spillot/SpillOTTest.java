@@ -140,7 +140,6 @@ class SpillOTTest {
             assertEquals(List.of(7, 9), manifest.get("origin_xy"));
             assertEquals(List.of("CD8", "DNA"), manifest.get("channel_names"));
             assertEquals(List.of(0.325, 0.5), manifest.get("pixel_size_um"));
-            assertTrue(params.tileToSaveMemory);
             assertEquals(0, params.memoryBudgetMB);
             tile.flush();
         }
@@ -215,26 +214,33 @@ class SpillOTTest {
         }
     }
 
-    @Test void fiveArgumentScriptingApiStillRunsTheUntiledBackend() throws Exception {
+    @Test void fiveArgumentScriptingApiUsesAutomaticMemoryPlanning() throws Exception {
         String env = System.getenv("SPILLOT_TEST_ENV");
         assumeTrue(env != null && Files.isRegularFile(SpillOT.pythonFromEnv(env)));
         try (var server = sampleServer()) {
             SpillOT.Params params = new SpillOT.Params();
-            params.tileToSaveMemory = false;
             params.envPath = env;
             params.outputDir = directory;
-            params.baseName = "legacy";
+            params.baseName = "scripting";
             params.region = ImageRegion.createInstance(7, 9, 12, 12, 0, 0);
             params.patchSize = 8;
             params.workers = 1;
             params.sources.put(0, Set.of(1));
-            var result = SpillOT.run(server, params, System.out::println, null, () -> false);
+            List<String> logs = new ArrayList<>();
+            var result = SpillOT.run(server, params, logs::add, null, () -> false);
+            assertTrue(logs.stream().anyMatch(line -> line.startsWith("Low-memory SpillOT plan:")),
+                    "The existing five-argument API must always use the memory-aware backend");
             assertTrue(Files.size(result.fullStack) > 0);
-            ImagePlus full = new ij.io.Opener().openImage(result.fullStack.toString());
-            assertNotNull(full);
-            assertEquals(2, full.getStackSize());
-            assertEquals(10907, full.getStack().getProcessor(2).get(0, 0));
-            full.flush();
+            String verify = "import sys,tifffile,numpy as np; "
+                    + "a=tifffile.imread(sys.argv[1]); b=tifffile.imread(sys.argv[2]); "
+                    + "assert a.shape == b.shape == (2,12,12); "
+                    + "assert a.dtype == b.dtype == np.dtype('uint16'); "
+                    + "assert np.array_equal(a[1],b[1]); assert int(b[1,0,0]) == 10907; "
+                    + "assert tifffile.TiffFile(sys.argv[2]).is_ome";
+            Process check = new ProcessBuilder(SpillOT.pythonFromEnv(env).toString(), "-c", verify,
+                    result.input.toString(), result.fullStack.toString()).redirectErrorStream(true).start();
+            String output = new String(check.getInputStream().readAllBytes());
+            assertEquals(0, check.waitFor(), output);
         }
     }
 

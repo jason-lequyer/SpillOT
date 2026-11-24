@@ -2,7 +2,7 @@
 
 A QuPath extension that runs SpillOT spillover removal on the image open in QuPath.
 It has the same workflow as the Fiji plugin and reuses its patch solver and
-comparison algorithm. The optional memory-saving runner processes tiles and
+comparison algorithm. The memory-aware runner automatically processes tiles and
 patch batches without holding all overlapping patches in RAM.
 
 Requires **QuPath 0.7.0 or later**.
@@ -17,7 +17,7 @@ Requires **QuPath 0.7.0 or later**.
    conda create -n spillot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
    ```
 
-2. Download [qupath-extension-spillot-0.2.1.jar](../qupath-extension-spillot-0.2.1.jar),
+2. Download [qupath-extension-spillot-0.2.2.jar](../qupath-extension-spillot-0.2.2.jar),
    remove any older SpillOT extension jar, then drag the new jar onto the QuPath
    window and restart QuPath. Both Python runners are inside the jar; nothing
    else needs to be copied.
@@ -32,17 +32,14 @@ Requires **QuPath 0.7.0 or later**.
    that you suspect are bleeding into it. Signal is removed only where local structure matches.
 4. Set the patch size (even, >= 4; default 24, smaller is faster and more aggressive), the number
    of worker processes, and the path to the `spillot` conda environment (prefilled when found).
-5. Leave **Tile to save memory** checked (the default). The extension automatically
-   exports and processes the region in bounded tiles, using the available RAM to
-   choose its working size. You do not need to draw tiles or split the original image.
-6. Click **Run**. The window shows the current stage, progress and an estimated
+5. Click **Run**. The window shows the current stage, progress and an estimated
    remaining time once enough work has completed to measure the processing rate.
    The estimate updates as the run proceeds; saving the result is a separate stage.
 
 When the run finishes the cleaned image is added to the open project (or offered for opening in
 the viewer if there is no project) with the original channel names and colours.
 
-## Tile to save memory
+## Automatic memory management
 
 Tile size and patch size are different settings. **Patch size stays at 24** unless
 you change it. Each tile includes the context needed by patches that cross its
@@ -52,11 +49,11 @@ selected region are retained in the output, including channels you did not clean
 
 Tiles are processed in sequence. The backend limits its patch batches and worker
 count to fit the estimated RAM budget, so the requested worker count is an upper
-limit in this mode. The chosen settings are recorded in the run log. Memory
+limit. The chosen settings are recorded in the run log. Memory
 estimates leave headroom for QuPath and the operating system, but other applications
 can still change how much memory is available during a run.
 
-The automatic budget is **45% of available RAM at startup, with no fixed GiB
+The automatic budget is **75% of available RAM at startup, with no fixed GiB
 ceiling**. It scales to larger workstations as well as laptops. The planner uses
 that budget to choose its working sizes and worker count; it does not allocate
 unused memory just to fill the budget or continuously resize during a run.
@@ -83,8 +80,6 @@ global neighboring signal, rather than a fixed tile halo. If the full nearest-ne
 index would exceed the memory budget, a bounded search is used and logged. Equally
 distant neighbors may be selected differently in that fallback.
 
-Switch **Tile to save memory** off to use the original whole-region backend.
-
 ## Outputs
 
 Written to the output folder (default: a `SpillOT` folder in the project or next to the image):
@@ -99,7 +94,7 @@ Written to the output folder (default: a `SpillOT` folder in the project or next
 These are the same files and CSV convention as the Fiji plugin, so the exported `.tif` + `.csv`
 pair can also be sent to a cluster and run with `plugins/SpillOT/SpillOT.py`.
 If a `.csv` from an earlier run on the same region exists, the dialog is prefilled from it.
-In memory-saving mode, TIFF output includes channel names and pixel calibration;
+TIFF output includes channel names and pixel calibration;
 large files use BigTIFF. A cropped region is still a new image with its own local
 pixel coordinates; the source origin is retained in the output metadata.
 
@@ -110,7 +105,7 @@ pixel coordinates; the source origin is retained in the output metadata.
   markers `Ch1`, `Ch2`, ...; the result is saved as a proper multichannel image.
 - For images with real z-slices or timepoints, the plane shown in the viewer is processed.
 - RGB (brightfield) images are not supported.
-- Memory-saving mode supports unsigned 8-bit, unsigned 16-bit and 32-bit float
+- SpillOT supports unsigned 8-bit, unsigned 16-bit and 32-bit float
   images. Other source pixel types are rejected before export to avoid silently
   losing precision.
 - The backend is CPU-only.
@@ -124,7 +119,6 @@ def p = new SpillOT.Params()
 p.envPath   = "/home/me/miniconda3/envs/spillot"
 p.outputDir = java.nio.file.Paths.get("/data/spillot_out")
 p.baseName  = "my_region"
-p.tileToSaveMemory = true          // default: automatic tiles and bounded memory
 // p.memoryBudgetMB = 1024         // optional backend budget; 0 = automatic
 p.sources.put(20, [25, 27] as Set)   // 0-based: remove channels 26 and 28 from channel 21
 // p.region = qupath.lib.regions.ImageRegion.createInstance(x, y, width, height, 0, 0)

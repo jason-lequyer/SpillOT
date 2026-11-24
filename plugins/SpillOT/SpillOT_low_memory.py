@@ -300,7 +300,7 @@ def plan_memory(shape, dtype, patch_size, workers, memory_budget_mb=0,
     available = max(1, int(available_bytes if available_bytes is not None else available_memory_bytes()))
     requested_budget = int(float(memory_budget_mb) * MIB)
     # Scale with available RAM; there is no fixed GiB ceiling on larger machines.
-    budget = requested_budget if requested_budget else int(available * 0.45)
+    budget = requested_budget if requested_budget else int(available * 0.75)
     # An explicit budget cannot reserve memory the machine does not currently
     # have. Keep a smaller safety margin because the caller chose that budget.
     budget = min(budget, int(available * 0.80))
@@ -311,7 +311,7 @@ def plan_memory(shape, dtype, patch_size, workers, memory_budget_mb=0,
     workers = min(workers, max(1, os.cpu_count() or 1))
     per_patch = 64 * q*q + 160 * p*p
     minimum_work = per_patch * 2 + 40 * (2 * (p+1) + 1)**2 + 16 * MIB
-    while workers > 1 and parent_bytes + workers * worker_bytes + minimum_work > budget:
+    while workers > 1 and parent_bytes + workers * worker_bytes + minimum_work + 16 * MIB >= budget:
         workers -= 1
     fixed = parent_bytes + (workers * worker_bytes if workers > 1 else 0)
     remaining = budget - fixed - 16 * MIB  # bounded I/O buffers and TIFF writer
@@ -665,13 +665,22 @@ def _tiff_metadata(manifest, channels):
     for key in ("full_dimensions", "source_origin_xy"):
         if key in manifest:
             description[key] = manifest[key]
-    metadata = {"axes": "CYX", "Name": manifest["base_name"],
+    full_fiji = (manifest.get("fiji_dimensions") is not None
+                 and list(channels) == list(range(manifest["shape"][0])))
+    if full_fiji:
+        count_c, count_z, count_t = manifest["fiji_dimensions"]
+        description["fiji_dimensions"] = [count_c, count_z, count_t]
+        description["plane_names"] = names
+        if manifest.get("fiji_image_info") is not None:
+            description["fiji_image_info"] = str(manifest["fiji_image_info"])
+    metadata = {"axes": "TZCYX" if full_fiji else "CYX", "Name": manifest["base_name"],
                 "Description": json.dumps(description, ensure_ascii=True),
-                "Channel": {"Name": [names[c] for c in channels]}}
+                "Channel": {"Name": (manifest.get("fiji_channel_names", names[:count_c])
+                                      if full_fiji else [names[c] for c in channels])}}
     if manifest.get("channel_colors") is not None:
         # OME colors use signed RGBA, whereas QuPath supplies RGB integers.
         colors = []
-        for c in channels:
+        for c in (range(count_c) if full_fiji else channels):
             rgba = ((int(manifest["channel_colors"][c]) & 0xffffff) << 8) | 255
             colors.append(rgba if rgba < 2**31 else rgba-2**32)
         metadata["Channel"]["Color"] = colors
@@ -684,6 +693,10 @@ def _tiff_metadata(manifest, channels):
             "PositionY": [float(origin[1])*py]*len(channels),
             "PositionXUnit": ["µm"]*len(channels),
             "PositionYUnit": ["µm"]*len(channels)}
+    if full_fiji and manifest.get("fiji_pixel_depth_um") is not None:
+        metadata.update(PhysicalSizeZ=float(manifest["fiji_pixel_depth_um"]), PhysicalSizeZUnit="µm")
+    if full_fiji and manifest.get("frame_interval_seconds") is not None:
+        metadata.update(TimeIncrement=float(manifest["frame_interval_seconds"]), TimeIncrementUnit="s")
     return metadata
 
 
@@ -723,7 +736,11 @@ def write_streaming_tiff(path, source, channels, manifest, cancel, tick):
         kwargs.update(resolution=(10000/float(calibration[0]), 10000/float(calibration[1])),
                       resolutionunit="CENTIMETER")
     with TiffWriter(str(path), bigtiff=encoded_estimate >= int(3.8*1024**3), ome=True) as writer:
-        writer.write(generate(), shape=(len(channels), height, width), dtype=source.dtype,
+        shape = (len(channels), height, width)
+        if manifest.get("fiji_dimensions") is not None and list(channels) == list(range(source.shape[0])):
+            count_c, count_z, count_t = manifest["fiji_dimensions"]
+            shape = (count_t, count_z, count_c, height, width)
+        writer.write(generate(), shape=shape, dtype=source.dtype,
                      tile=(th, tw), photometric="minisblack", compression=None,
                      metadata=_tiff_metadata(manifest, channels), **kwargs)
     cancel()
@@ -877,6 +894,27 @@ def validate_manifest(value):
     calibration = manifest.get("pixel_size_um")
     if calibration is not None and (len(calibration) != 2 or any(not math.isfinite(float(v)) or float(v) <= 0 for v in calibration)):
         raise ValueError("pixel_size_um must be null or two positive finite numbers.")
+    for key in ("write_input_copy", "publish_csv"):
+        if key in manifest and not isinstance(manifest[key], bool):
+            raise ValueError(key + " must be a boolean.")
+    if "target_channels" in manifest:
+        targets = manifest["target_channels"]
+        if not isinstance(targets, list) or any(isinstance(v, bool) or not isinstance(v, int)
+                                               or v < 0 or v >= shape[0] for v in targets):
+            raise ValueError("target_channels must be a list of zero-based input plane indices.")
+        manifest["target_channels"] = sorted(set(targets))
+    if "fiji_dimensions" in manifest:
+        dims = manifest["fiji_dimensions"]
+        if (len(dims) != 3 or any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in dims)
+                or math.prod(dims) != shape[0]):
+            raise ValueError("fiji_dimensions must be positive [C, Z, T] integers covering every input plane.")
+        if "fiji_channel_names" in manifest:
+            if len(manifest["fiji_channel_names"]) != dims[0]:
+                raise ValueError("fiji_channel_names must contain one name per C dimension.")
+            manifest["fiji_channel_names"] = [str(v) for v in manifest["fiji_channel_names"]]
+    for key in ("fiji_pixel_depth_um", "frame_interval_seconds"):
+        if key in manifest and (not math.isfinite(float(manifest[key])) or float(manifest[key]) <= 0):
+            raise ValueError(key + " must be a positive finite number.")
     return manifest
 
 
@@ -904,7 +942,11 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
     for channel in range(channels):
         donors = np.flatnonzero(np.isclose(np.abs(selection[channel]), 1, atol=1e-6))
         donors_by_channel.append(donors[donors != channel])
-    targets = [c for c in range(channels) if len(donors_by_channel[c])]
+    targets = manifest.get("target_channels", [c for c in range(channels) if len(donors_by_channel[c])])
+    processing_targets = [c for c in targets if len(donors_by_channel[c])]
+    write_input_copy = manifest.get("write_input_copy", True)
+    publish_csv = manifest.get("publish_csv", True)
+    output_planes = channels * (2 if write_input_copy else 1) + len(targets)
     output_dir = Path(manifest["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     scratch_dir = Path(manifest.get("scratch_dir", Path(path).resolve().parent)).expanduser()
@@ -918,7 +960,7 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
     cancel()
     input_size = channels*height*width*dtype.itemsize
     extra_disk = (input_size + 5*height*width
-                  + tiff_storage_estimate(height, width, 2*channels+len(targets), dtype)
+                  + tiff_storage_estimate(height, width, output_planes, dtype)
                   + (len(targets)+2)*MIB + Path(manifest["csv_path"]).stat().st_size)
     if shutil.disk_usage(output_dir).free < int(extra_disk*1.10) + 16*MIB:
         raise ValueError("Not enough free disk space for temporary data and complete TIFF outputs.")
@@ -951,7 +993,7 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
                     offsets[channel] = max(0, -np.float32(minimum[channel]))
                 backend = load_backend(DEFAULT_BACKEND)
                 configure_graph(backend, patch)
-                if targets and plan["workers"] > 1:
+                if processing_targets and plan["workers"] > 1:
                     pool = cf.ProcessPoolExecutor(max_workers=plan["workers"],
                         mp_context=mp.get_context("spawn"), initializer=_init_worker,
                         initargs=(str(DEFAULT_BACKEND), patch))
@@ -960,12 +1002,18 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
                 for core in tiles(height, width, plan["tile_size"]):
                     ya, yb, xa, xb = patch_bounds(core, height, width, patch)
                     positions_per_channel += (yb-ya)*(xb-xa)
-                total_work = positions_per_channel * sum(1+len(donors_by_channel[c]) for c in targets)
+                total_work = positions_per_channel * sum(1+len(donors_by_channel[c]) for c in processing_targets)
                 completed_work = 0
                 work_started = time.monotonic()
                 report_channels = []
                 for channel in targets:
                     donors = donors_by_channel[channel]
+                    if not len(donors):
+                        # Explicitly selected empty rows are unchanged, including float bits.
+                        report_channels.append(dict(channel=channel+1, donor_channels=[],
+                            patches_processed=0, removed_patch_visits=0, global_patch_count=0,
+                            seconds=0, completed=True, unchanged=True))
+                        continue
                     result = RawArray(temporary/"channel-float.raw", (1, height, width), "<f4", create=True, cancel=cancel)
                     saturation = None
                     sat_count = 0
@@ -1016,10 +1064,11 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
                 _stop_pool(pool, False)
                 pool = None
                 base_name = manifest["base_name"]
-                jobs = [(temporary/(base_name+".tif"), raw, list(range(channels)))]
+                jobs = ([(temporary/(base_name+".tif"), raw, list(range(channels)))]
+                        if write_input_copy else [])
                 jobs.extend((temporary/(base_name+f"_Channel_{c+1}_SpillOT.tif"), out, [c]) for c in targets)
                 jobs.append((temporary/(base_name+"_SpillOT.tif"), out, list(range(channels))))
-                total_bytes = (2*channels+len(targets))*height*width*dtype.itemsize
+                total_bytes = output_planes*height*width*dtype.itemsize
                 saved = 0
                 progress.emit("finalizing", 0, total_bytes, 0.90, "Writing TIFF outputs; the run is not complete yet.")
                 def saved_tick(amount):
@@ -1029,9 +1078,11 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
                                   "Writing complete TIFF outputs to temporary files.")
                 for destination, source, selected in jobs:
                     write_streaming_tiff(destination, source, selected, manifest, cancel, saved_tick)
-                staged_csv = temporary/(base_name+".csv")
-                shutil.copyfile(manifest["csv_path"], staged_csv)
-                staged_paths = [j[0] for j in jobs] + [staged_csv]
+                staged_paths = [j[0] for j in jobs]
+                if publish_csv:
+                    staged_csv = temporary/(base_name+".csv")
+                    shutil.copyfile(manifest["csv_path"], staged_csv)
+                    staged_paths.append(staged_csv)
                 progress.emit("publishing", 0, len(staged_paths), 0.995,
                               "Publishing the completed TIFF outputs and channel matrix.")
                 output_files = publish_outputs(staged_paths, output_dir, temporary, cancel, scratch_dir)

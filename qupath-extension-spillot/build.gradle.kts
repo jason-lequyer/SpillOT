@@ -8,7 +8,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-spillot"
     group = "qupath.ext.spillot"
-    version = "0.2.1"
+    version = "0.2.2"
     description = "SpillOT: user-guided spillover removal for highly multiplexed images"
     automaticModule = "qupath.ext.spillot"
 }

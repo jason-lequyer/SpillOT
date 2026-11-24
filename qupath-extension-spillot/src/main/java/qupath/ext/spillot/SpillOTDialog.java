@@ -82,10 +82,8 @@ final class SpillOTDialog {
     private static final StringProperty PREF_ENV = PathPrefs.createPersistentPreference("spillot.envPath", "");
     private static final IntegerProperty PREF_PATCH =
             PathPrefs.createPersistentPreference("spillot.patchSize", SpillOT.DEFAULT_PATCH_SIZE);
-    private static final BooleanProperty PREF_TILE_TO_SAVE_MEMORY =
-            PathPrefs.createPersistentPreference("spillot.tileToSaveMemory", true);
 
-    /** Above this many pixels the user is asked to confirm (time and memory grow with area). */
+    /** Above this many pixels display a reminder about processing time. */
     private static final long LARGE_REGION_PIXELS = 500_000L;
     private static final int THUMB_PIXELS = 256;
     private static final String TILE_BASE = "-fx-background-radius: 6; -fx-border-radius: 6; -fx-border-width: 3; ";
@@ -121,7 +119,6 @@ final class SpillOTDialog {
     private final TextField envField = new TextField();
     private final TextField outField = new TextField();
     private final CheckBox overexposed = new CheckBox("Ignore overexposed pixels (set saturated to 0, then inpaint)");
-    private final CheckBox tileToSaveMemory = new CheckBox("Tile to save memory");
     private final ProgressBar progressBar = new ProgressBar(0);
     private final Label progressLabel = new Label("Ready");
     private final TextArea logArea = new TextArea();
@@ -268,16 +265,8 @@ final class SpillOTDialog {
         patchSpinner.getValueFactory().setValue(PREF_PATCH.get() >= 4 ? PREF_PATCH.get() : SpillOT.DEFAULT_PATCH_SIZE);
         patchSpinner.setTooltip(new Tooltip("Even integer >= 4. Lower = more aggressive removal and faster runs."));
         workerSpinner.setEditable(true);
-        workerSpinner.setTooltip(new Tooltip("Maximum worker processes. With 'Tile to save memory' enabled, "
-                + "the backend limits this further to fit available RAM. Reduce it for other applications to have more memory."));
-        tileToSaveMemory.setSelected(PREF_TILE_TO_SAVE_MEMORY.get());
-        tileToSaveMemory.setTooltip(new Tooltip("Process the chosen region automatically in serial tiles using "
-                + "a RAM budget chosen from available memory. No annotations or manual tiles are needed. "
-                + "This reduces peak memory, but may not reduce running time. Turn off to use the original full-stack workflow."));
-        tileToSaveMemory.selectedProperty().addListener((v, oldValue, newValue) -> {
-            PREF_TILE_TO_SAVE_MEMORY.set(newValue);
-            updateRegionInfo();
-        });
+        workerSpinner.setTooltip(new Tooltip("Maximum worker processes. The backend automatically limits "
+                + "this to fit available RAM. Reduce it to leave more memory for other applications."));
         String env = PREF_ENV.get();
         if (env == null || env.isBlank() || SpillOT.pythonFromEnv(env) == null
                 || !SpillOT.pythonFromEnv(env).toFile().exists())
@@ -296,13 +285,12 @@ final class SpillOTDialog {
         settings.setPadding(new Insets(6, 10, 6, 10));
         settings.addRow(0, new Label("Patch size:"), patchSpinner, new Label("Worker processes:"), workerSpinner);
         settings.add(overexposed, 4, 0, 2, 1);
-        settings.add(tileToSaveMemory, 0, 1, 6, 1);
-        settings.add(new Label("Conda env path:"), 0, 2);
-        settings.add(envField, 1, 2, 4, 1);
-        settings.add(browseEnv, 5, 2);
-        settings.add(new Label("Output folder:"), 0, 3);
-        settings.add(outField, 1, 3, 4, 1);
-        settings.add(browseOut, 5, 3);
+        settings.add(new Label("Conda env path:"), 0, 1);
+        settings.add(envField, 1, 1, 4, 1);
+        settings.add(browseEnv, 5, 1);
+        settings.add(new Label("Output folder:"), 0, 2);
+        settings.add(outField, 1, 2, 4, 1);
+        settings.add(browseOut, 5, 2);
         GridPane.setHgrow(envField, Priority.ALWAYS);
         GridPane.setHgrow(outField, Priority.ALWAYS);
 
@@ -500,19 +488,11 @@ final class SpillOTDialog {
         ImageRegion r = region();
         long pixels = (long) r.getWidth() * r.getHeight();
         String txt = r.getWidth() + " x " + r.getHeight() + " px";
-        if (selectedRegion == null && !tileToSaveMemory.isSelected())
+        if (selectedRegion == null)
             txt += "   (select an annotation before opening SpillOT to process just that area)";
-        if (pixels > LARGE_REGION_PIXELS) {
-            if (tileToSaveMemory.isSelected()) {
-                txt += "   Automatic tiles limit memory; a large region can still take a long time.";
-                regionInfo.setStyle("");
-            } else {
-                txt += "   Large region: expect a long run and high memory use.";
-                regionInfo.setStyle("-fx-text-fill: #c0392b;");
-            }
-        } else {
-            regionInfo.setStyle("");
-        }
+        if (pixels > LARGE_REGION_PIXELS)
+            txt += "   A large region can take a long time to process.";
+        regionInfo.setStyle("");
         regionInfo.setText(txt);
     }
 
@@ -622,18 +602,8 @@ final class SpillOTDialog {
 
         ImageRegion r = region();
         long pixels = (long) r.getWidth() * r.getHeight();
-        if (pixels > LARGE_REGION_PIXELS && !tileToSaveMemory.isSelected() && !Dialogs.showConfirmDialog("SpillOT",
-                "The region is " + r.getWidth() + " x " + r.getHeight() + " px.\n\n"
-                + "SpillOT compares every overlapping patch, so run time and memory grow with the area "
-                + "(as a guide, 200 x 200 px takes about a minute per channel at patch size 24).\n"
-                + "For whole-slide images, draw an annotation around the area of interest first, "
-                + "and lower the number of worker processes if you run out of memory.\n\n"
-                + "Continue anyway?"))
-            return;
-
         p.patchSize = patch;
         p.workers = workers;
-        p.tileToSaveMemory = tileToSaveMemory.isSelected();
         p.envPath = env;
         p.ignoreOverexposed = overexposed.isSelected();
         p.outputDir = outputDir();
@@ -651,7 +621,7 @@ final class SpillOTDialog {
         runStarted = System.nanoTime();
         progressBar.setProgress(0);
         progressLabel.setText("Starting; estimating remaining time");
-        if (p.tileToSaveMemory && pixels > LARGE_REGION_PIXELS)
+        if (pixels > LARGE_REGION_PIXELS)
             log("Large region: automatic tiles limit memory, but total processing time still grows with image area.");
         setRunning(true);
 

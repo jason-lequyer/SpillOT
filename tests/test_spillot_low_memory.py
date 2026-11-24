@@ -441,6 +441,66 @@ class TiledSpillOTTests(unittest.TestCase):
             process.stdout.close()
             process.stderr.close()
 
+    def test_fiji_hyperstack_targets_and_source_files_are_preserved(self):
+        stack = np.tile(fixture(13, 17), (4, 1, 1))
+        raw = self.directory / "fiji.raw"
+        stack.tofile(raw)
+        names = ["Plane " + str(i + 1) for i in range(12)]
+        matrix = self.directory / "fiji_selection.csv"
+        selection = np.zeros((12, 12), dtype=int)
+        selection[0, 1] = 1
+        selection[2, 1] = 1  # Persisted row that is not selected this run.
+        with matrix.open("w", newline="") as stream:
+            csv.writer(stream).writerows([["", *names]] + [
+                [names[i], *selection[i]] for i in range(12)])
+        original = self.directory / "roi.tif"
+        original.write_bytes(b"source TIFF must stay intact")
+        original_csv = self.directory / "roi.csv"
+        original_csv.write_bytes(b"source CSV must stay intact")
+        manifest = {
+            "input_raw": str(raw), "shape": list(stack.shape), "dtype": stack.dtype.str,
+            "output_dir": str(self.directory), "base_name": "roi",
+            "csv_path": str(matrix), "channel_names": names,
+            "pixel_size_um": [.65, .8], "origin_xy": [-3.25, -4.5],
+            "patch_size": 4, "workers": 1, "memory_budget_mb": 384,
+            "target_channels": [0, 4],  # Plane5 intentionally has no donors.
+            "write_input_copy": False, "publish_csv": False,
+            "fiji_dimensions": [2, 3, 2], "fiji_channel_names": ["C1", "C2"],
+            "fiji_pixel_depth_um": 1.5, "frame_interval_seconds": 2.25,
+        }
+        path = self.directory / "fiji.json"
+        path.write_text(json.dumps(manifest))
+        report, _ = self.run_backend(path, tile_size=5, batch_size=7)
+        self.assertTrue(report["completed"])
+        self.assertEqual(len(report["output_files"]), 3)
+        self.assertEqual(original.read_bytes(), b"source TIFF must stay intact")
+        self.assertEqual(original_csv.read_bytes(), b"source CSV must stay intact")
+        self.assertFalse((self.directory / "roi_Channel_3_SpillOT.tif").exists())
+        with tifffile.TiffFile(self.directory / "roi_SpillOT.tif") as image:
+            self.assertEqual(image.series[0].axes, "TZCYX")
+            self.assertEqual(image.series[0].shape, (2, 3, 2, 13, 17))
+            restored = image.asarray().reshape(stack.shape)
+            xml = ET.fromstring(image.ome_metadata)
+        np.testing.assert_array_equal(restored[1:], stack[1:])
+        self.assertGreater(np.count_nonzero(restored[0] != stack[0]), 0)
+        np.testing.assert_array_equal(
+            tifffile.imread(self.directory / "roi_Channel_5_SpillOT.tif"), stack[4])
+        ns = {"ome": "http://www.openmicroscopy.org/Schemas/OME/2016-06"}
+        pixels = xml.find(".//ome:Pixels", ns)
+        self.assertEqual(float(pixels.attrib["PhysicalSizeX"]), .65)
+        self.assertEqual(float(pixels.attrib["PhysicalSizeY"]), .8)
+        self.assertEqual(float(pixels.attrib["PhysicalSizeZ"]), 1.5)
+        self.assertEqual(float(pixels.attrib["TimeIncrement"]), 2.25)
+        self.assertEqual([c.attrib["Name"] for c in pixels.findall("ome:Channel", ns)], ["C1", "C2"])
+
+    def test_invalid_fiji_dimensions_or_targets_fail_before_io(self):
+        path, manifest = self.make_manifest(fixture(13, 17))
+        for overrides in ({"fiji_dimensions": [2, 2, 1]},
+                          {"target_channels": [3]}, {"target_channels": [-1]},
+                          {"target_channels": [True]}, {"write_input_copy": "false"}):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                self.backend.validate_manifest(dict(manifest, **overrides))
+
     def test_memory_plan_reduces_workers_and_fits_large_image_budget(self):
         plan = self.backend.plan_memory(
             (19, 13000, 20000), np.dtype("float32"), 24, 64,
@@ -461,13 +521,48 @@ class TiledSpillOTTests(unittest.TestCase):
                     plan = self.backend.plan_memory(
                         (20, 13000, 20000), np.dtype("float32"), 24, 256,
                         available_bytes=available)
-                    self.assertEqual(plan["memory_budget_bytes"], int(available * 0.45))
+                    self.assertEqual(plan["memory_budget_bytes"], int(available * 0.75))
                     self.assertLessEqual(plan["estimated_peak_bytes"], plan["memory_budget_bytes"])
                     plans.append(plan)
         self.assertGreater(plans[1]["memory_budget_bytes"], 8 * 1024**3)
         self.assertGreater(plans[2]["memory_budget_bytes"], plans[1]["memory_budget_bytes"])
         self.assertGreater(plans[1]["workers"], plans[0]["workers"])
         self.assertGreater(plans[2]["workers"], plans[1]["workers"])
+
+    def test_auto_budget_leaves_headroom_and_adapts_on_a_busy_laptop(self):
+        with mock.patch.object(self.backend.os, "cpu_count", return_value=14):
+            plans = [self.backend.plan_memory(
+                (20, 2000, 2000), np.dtype("float32"), 24, 14,
+                available_bytes=gib * 1024**3) for gib in (1, 2, 6, 16)]
+        for plan in plans:
+            self.assertLessEqual(plan["memory_budget_bytes"], plan["available_bytes"] * .75)
+            self.assertLessEqual(plan["estimated_peak_bytes"], plan["memory_budget_bytes"])
+            self.assertGreater(plan["tile_size"], 0)
+            self.assertGreater(plan["batch_size"], 0)
+        self.assertEqual(plans[0]["workers"], 1)
+        self.assertEqual(plans[-1]["workers"], 14)
+        self.assertGreater(plans[-1]["workers"], plans[0]["workers"])
+
+    def test_worker_reduction_reserves_final_io_headroom(self):
+        # Budgets immediately below each worker threshold used to pass the
+        # worker loop, then fail the final buffer check instead of reducing
+        # workers again. A one-worker plan demonstrably fits these budgets.
+        with mock.patch.object(self.backend.os, "cpu_count", return_value=14):
+            for budget in (850, 1120, 1400):
+                with self.subTest(memory_budget_mb=budget):
+                    plan = self.backend.plan_memory(
+                        (20, 2000, 2000), np.dtype("uint16"), 24, 14,
+                        memory_budget_mb=budget, available_bytes=20 * 1024**3)
+                    self.assertLessEqual(plan["estimated_peak_bytes"], plan["memory_budget_bytes"])
+                    self.assertLess(plan["workers"], 14)
+
+    def test_explicit_budget_cannot_consume_all_available_memory(self):
+        available = 4 * 1024**3
+        plan = self.backend.plan_memory(
+            (20, 2000, 2000), np.dtype("float32"), 24, 14,
+            memory_budget_mb=16 * 1024, available_bytes=available)
+        self.assertEqual(plan["memory_budget_bytes"], int(available * .80))
+        self.assertLessEqual(plan["estimated_peak_bytes"], plan["memory_budget_bytes"])
 
     def test_large_patch_fails_planning_before_allocating_solver_graph(self):
         with mock.patch.object(self.backend, "configure_graph") as graph:
