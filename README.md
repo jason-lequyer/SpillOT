@@ -310,7 +310,7 @@ Make sure the channel order matches the row/column order of any CSV matrix you u
 SpillOT is also available as a QuPath extension (QuPath 0.7.0 or later). It uses the same SpillOT patch comparison algorithm and the same `spillot` conda environment as the Fiji plugin.
 
 1. Create the `spillot` conda environment as described in the [Fiji quick start](#quick-start).
-2. Download [qupath-extension-spillot-0.2.0.jar](qupath-extension-spillot-0.2.0.jar), drag it onto the QuPath window, and restart QuPath. Remove an older SpillOT extension jar before installing the update.
+2. Download [qupath-extension-spillot-0.2.1.jar](qupath-extension-spillot-0.2.1.jar), drag it onto the QuPath window, and restart QuPath. Remove an older SpillOT extension jar before installing the update.
 3. Open a multiplexed image. For whole-slide images, draw and select an annotation around the area to clean.
 4. Run **Extensions → SpillOT → Run SpillOT...**
 5. Leave **Tile to save memory** checked to divide the selected region into automatic processing tiles. Tile size adapts to available RAM; patch size stays at `24` unless you change it. The window shows progress and an ETA after processing has warmed up. The result keeps the full selected region and its channels.

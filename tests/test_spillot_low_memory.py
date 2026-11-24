@@ -452,6 +452,23 @@ class TiledSpillOTTests(unittest.TestCase):
         self.assertLessEqual(plan["estimated_peak_bytes"], plan["memory_budget_bytes"])
         self.assertLessEqual(plan["memory_budget_bytes"], 384 * 1024**2)
 
+    def test_auto_budget_scales_past_eight_gib_with_available_ram(self):
+        plans = []
+        with mock.patch.object(self.backend.os, "cpu_count", return_value=256):
+            for gib in (16, 64, 256):
+                with self.subTest(available_gib=gib):
+                    available = gib * 1024**3
+                    plan = self.backend.plan_memory(
+                        (20, 13000, 20000), np.dtype("float32"), 24, 256,
+                        available_bytes=available)
+                    self.assertEqual(plan["memory_budget_bytes"], int(available * 0.45))
+                    self.assertLessEqual(plan["estimated_peak_bytes"], plan["memory_budget_bytes"])
+                    plans.append(plan)
+        self.assertGreater(plans[1]["memory_budget_bytes"], 8 * 1024**3)
+        self.assertGreater(plans[2]["memory_budget_bytes"], plans[1]["memory_budget_bytes"])
+        self.assertGreater(plans[1]["workers"], plans[0]["workers"])
+        self.assertGreater(plans[2]["workers"], plans[1]["workers"])
+
     def test_large_patch_fails_planning_before_allocating_solver_graph(self):
         with mock.patch.object(self.backend, "configure_graph") as graph:
             with self.assertRaisesRegex(ValueError, "memory budget|patch size"):

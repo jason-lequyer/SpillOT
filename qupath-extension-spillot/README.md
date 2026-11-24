@@ -17,7 +17,7 @@ Requires **QuPath 0.7.0 or later**.
    conda create -n spillot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
    ```
 
-2. Download [qupath-extension-spillot-0.2.0.jar](../qupath-extension-spillot-0.2.0.jar),
+2. Download [qupath-extension-spillot-0.2.1.jar](../qupath-extension-spillot-0.2.1.jar),
    remove any older SpillOT extension jar, then drag the new jar onto the QuPath
    window and restart QuPath. Both Python runners are inside the jar; nothing
    else needs to be copied.
@@ -55,6 +55,11 @@ count to fit the estimated RAM budget, so the requested worker count is an upper
 limit in this mode. The chosen settings are recorded in the run log. Memory
 estimates leave headroom for QuPath and the operating system, but other applications
 can still change how much memory is available during a run.
+
+The automatic budget is **45% of available RAM at startup, with no fixed GiB
+ceiling**. It scales to larger workstations as well as laptops. The planner uses
+that budget to choose its working sizes and worker count; it does not allocate
+unused memory just to fill the budget or continuously resize during a run.
 
 Temporary files are stored on disk, and the extension checks free disk space before
 exporting. Large slides therefore need substantial free disk space even when RAM

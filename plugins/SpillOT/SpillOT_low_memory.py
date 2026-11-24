@@ -299,7 +299,8 @@ def plan_memory(shape, dtype, patch_size, workers, memory_budget_mb=0,
             raise ValueError(name + " must be a positive integer.")
     available = max(1, int(available_bytes if available_bytes is not None else available_memory_bytes()))
     requested_budget = int(float(memory_budget_mb) * MIB)
-    budget = requested_budget if requested_budget else min(8 * 1024 * MIB, int(available * 0.45))
+    # Scale with available RAM; there is no fixed GiB ceiling on larger machines.
+    budget = requested_budget if requested_budget else int(available * 0.45)
     # An explicit budget cannot reserve memory the machine does not currently
     # have. Keep a smaller safety margin because the caller chose that budget.
     budget = min(budget, int(available * 0.80))
