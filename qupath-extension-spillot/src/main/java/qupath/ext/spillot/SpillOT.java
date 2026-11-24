@@ -747,9 +747,9 @@ public final class SpillOT {
     /** Copy the bundled backend files to a temporary folder and return the memory-aware runner. */
     static Path extractRunner() throws IOException {
         Path dir = Files.createTempDirectory("spillot-qupath-");
-        Path runner = dir.resolve("SpillOT_low_memory.py");
+        Path runner = dir.resolve("SpillOTMemory.py");
         try {
-            for (String name : List.of("SpillOT.py", "SpillOT_low_memory.py")) {
+            for (String name : List.of("SpillOT.py", "SpillOTMemory.py")) {
                 try (InputStream in = SpillOT.class.getResourceAsStream(name)) {
                     if (in == null)
                         throw new IOException(name + " is missing from the extension jar.");
@@ -769,7 +769,7 @@ public final class SpillOT {
         Path directory = runner.getParent();
         try {
             Files.deleteIfExists(directory.resolve("SpillOT.py"));
-            Files.deleteIfExists(directory.resolve("SpillOT_low_memory.py"));
+            Files.deleteIfExists(directory.resolve("SpillOTMemory.py"));
             Files.deleteIfExists(directory);
         } catch (IOException ignored) {
             // Only private temporary runner files are involved.

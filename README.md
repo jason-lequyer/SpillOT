@@ -56,7 +56,8 @@ python -c "import numpy, scipy, tifffile; print('SpillOT env OK')"
 
 Download this repository by clicking **Code → Download ZIP** on GitHub, then unzip it.
 
-Copy the SpillOT plugin (plugins/SpillOT/) folder into your Fiji plugins directory
+Copy the SpillOT plugin (`plugins/SpillOT/`) folder into your Fiji plugins directory.
+For an update, replace the existing `SpillOT` folder so obsolete helper files are removed, then restart Fiji.
 
 Restart Fiji, or use:
 
@@ -277,7 +278,7 @@ This is rarely needed, but can be useful when saturated pixels are causing artef
 SpillOT is also available as a QuPath extension (QuPath 0.7.0 or later). It uses the same SpillOT patch comparison algorithm and the same `spillot` conda environment as the Fiji plugin.
 
 1. Create the `spillot` conda environment as described in the [Fiji quick start](#quick-start).
-2. Download [qupath-extension-spillot-0.2.2.jar](qupath-extension-spillot-0.2.2.jar), drag it onto the QuPath window, and restart QuPath. Remove an older SpillOT extension jar before installing the update.
+2. Download [qupath-extension-spillot-0.2.3.jar](qupath-extension-spillot-0.2.3.jar), drag it onto the QuPath window, and restart QuPath. Remove an older SpillOT extension jar before installing the update.
 3. Open a multiplexed image. For whole-slide images, draw and select an annotation around the area to clean.
 4. Run **Extensions → SpillOT → Run SpillOT...**
 5. Select the target channels and suspected spillover sources, then click **Run**. Memory use adjusts automatically, and the window shows progress and an ETA.

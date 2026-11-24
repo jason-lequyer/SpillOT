@@ -632,7 +632,6 @@ def inpaint_global(backend, result, saturation, plan, cancel, progress):
     estimate = 384 * height * width
     room = plan["memory_budget_bytes"] - plan["fixed_bytes"] - 16*MIB
     if estimate <= room:
-        print("Saturation inpainting: original global nearest-neighbor method.", flush=True)
         cancel()
         array = result.read(0, 0, height, 0, width)
         mask = saturation.read(0, 0, height, 0, width).astype(bool)
@@ -640,8 +639,6 @@ def inpaint_global(backend, result, saturation, plan, cancel, progress):
         cancel()
         result.write(0, 0, 0, array)
         return "stock_global"
-    print("Saturation inpainting: bounded global nearest-neighbor search. "
-          "Equal-distance ties use row/column order and may differ from the original KD-tree.", flush=True)
     bounded_global_inpaint(result, saturation, cancel, progress)
     return "bounded_global_ties_by_coordinate"
 
@@ -923,7 +920,7 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
     """Process every target selected by a matrix row; return published paths."""
     cancel = CancelCheck(cancel_event)
     progress = Progress(cancel)
-    progress.emit("initializing", 0, 1, 0, "Reading the low-memory export manifest.")
+    progress.emit("initializing", 0, 1, 0, "Preparing the image for processing.")
     manifest = validate_manifest(json.loads(Path(path).read_text(encoding="utf-8")))
     dtype = np.dtype(manifest["dtype"])
     channels, height, width = manifest["shape"]
@@ -934,9 +931,8 @@ def process_manifest(path, tile_size=None, batch_size=None, seed=None,
     seed = int(seed) if seed is not None else int(np.random.SeedSequence().generate_state(1)[0])
     if seed < 0:
         raise ValueError("Seed must be nonnegative.")
-    print("Low-memory SpillOT plan: " + json.dumps(dict(plan, seed=seed)), flush=True)
-    if plan["workers"] != plan["requested_workers"]:
-        print(f"Using {plan['workers']} of {plan['requested_workers']} requested workers to fit the memory budget.", flush=True)
+    # Routine planning details belong in the structured completion report.
+    # Plain stdout is surfaced as a diagnostic log by Fiji, opening its Log window.
     selection = load_selection(Path(manifest["csv_path"]), channels, True)
     donors_by_channel = []
     for channel in range(channels):

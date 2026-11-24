@@ -17,7 +17,7 @@ Requires **QuPath 0.7.0 or later**.
    conda create -n spillot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
    ```
 
-2. Download [qupath-extension-spillot-0.2.2.jar](../qupath-extension-spillot-0.2.2.jar),
+2. Download [qupath-extension-spillot-0.2.3.jar](../qupath-extension-spillot-0.2.3.jar),
    remove any older SpillOT extension jar, then drag the new jar onto the QuPath
    window and restart QuPath. Both Python runners are inside the jar; nothing
    else needs to be copied.
@@ -94,7 +94,7 @@ Needs a JDK 25 (the version QuPath 0.7 uses). From this folder:
 ```
 
 The jar is written to `build/libs/`. The build bundles `SpillOT.py` and
-`SpillOT_low_memory.py` from `../plugins/SpillOT/`, so this folder must stay inside
+`SpillOTMemory.py` from `../plugins/SpillOT/`, so this folder must stay inside
 the SpillOT repository.
 
 ## Tests

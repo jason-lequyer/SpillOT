@@ -353,7 +353,7 @@ def _recover(pyexe, backend_dir, scratch, env):
     if not os.path.isfile(os.path.join(scratch, 'publication.json')):
         return True
     script = ('import sys; sys.path.insert(0, sys.argv[1]); '
-              'from SpillOT_low_memory import recover_publication; '
+              'from SpillOTMemory import recover_publication; '
               'recover_publication(sys.argv[2])')
     process = subprocess.Popen([pyexe, '-c', script, backend_dir, scratch],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
@@ -368,9 +368,9 @@ def _recover(pyexe, backend_dir, scratch, env):
 def run(imp, names, axis_indices, selected_channels, donor_map, output_base,
         backend_dir, pyexe, env, patch_size, workers, ignore_overexposed):
     """Run the shared backend once, with live progress and a cancellation marker."""
-    runner = os.path.join(backend_dir, 'SpillOT_low_memory.py')
+    runner = os.path.join(backend_dir, 'SpillOTMemory.py')
     if not os.path.isfile(runner) or not os.path.isfile(os.path.join(backend_dir, 'SpillOT.py')):
-        raise IOError('Install the complete plugins/SpillOT folder, including SpillOT_low_memory.py.')
+        raise IOError('Install the complete plugins/SpillOT folder, including SpillOTMemory.py.')
     output_dir = os.path.dirname(os.path.abspath(output_base))
     scratch = tempfile.mkdtemp(prefix='.spillot-fiji-', dir=output_dir)
     dialog = ProgressDialog(os.path.join(scratch, 'cancel.requested'))
@@ -395,7 +395,7 @@ def run(imp, names, axis_indices, selected_channels, donor_map, output_base,
                               update.get('message', 'Processing'), update.get('eta_seconds'))
             elif line.startswith('SPILLOT_RESULT\t'):
                 report = json.loads(line.split('\t', 1)[1])
-            else:
+            elif line:
                 IJ.log(line)
                 recent.append(line)
                 recent = recent[-30:]

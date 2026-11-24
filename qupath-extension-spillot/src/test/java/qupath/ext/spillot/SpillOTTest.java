@@ -228,8 +228,10 @@ class SpillOTTest {
             params.sources.put(0, Set.of(1));
             List<String> logs = new ArrayList<>();
             var result = SpillOT.run(server, params, logs::add, null, () -> false);
-            assertTrue(logs.stream().anyMatch(line -> line.startsWith("Low-memory SpillOT plan:")),
+            assertTrue(logs.stream().anyMatch(line -> line.startsWith("SPILLOT_RESULT\t")),
                     "The existing five-argument API must always use the memory-aware backend");
+            assertFalse(logs.stream().anyMatch(line -> line.startsWith("Low-memory SpillOT plan:")),
+                    "Routine memory planning must not appear as a diagnostic message");
             assertTrue(Files.size(result.fullStack) > 0);
             String verify = "import sys,tifffile,numpy as np; "
                     + "a=tifffile.imread(sys.argv[1]); b=tifffile.imread(sys.argv[2]); "

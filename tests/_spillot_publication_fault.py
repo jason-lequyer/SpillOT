@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins/SpillOT"))
-import SpillOT_low_memory as backend
+import SpillOTMemory as backend
 
 
 def main():

@@ -169,11 +169,11 @@ try:
     if _plugins_dir:
         for _subdir in ("SpillOT", "SpillOT/bin", "", "Debleed", "Debleed/bin"):
             _helper_dirs.append(os.path.join(_plugins_dir, _subdir))
-    _helper_path = next((os.path.join(d, "SpillOT_fiji_memory.py") for d in _helper_dirs
-                         if os.path.isfile(os.path.join(d, "SpillOT_fiji_memory.py"))), None)
+    _helper_path = next((os.path.join(d, "SpillOTFiji.py") for d in _helper_dirs
+                         if os.path.isfile(os.path.join(d, "SpillOTFiji.py"))), None)
     if not _helper_path:
-        abort("Please install the complete plugins/SpillOT folder, including SpillOT_fiji_memory.py.")
-    memory_bridge = pyimp.load_source("SpillOT_fiji_memory", _helper_path)
+        abort("Please install the complete plugins/SpillOT folder, including SpillOTFiji.py.")
+    memory_bridge = pyimp.load_source("SpillOTFiji", _helper_path)
 
     # Keep original file path for naming outputs (even if we later temp-save for processing)
     orig_path_for_naming = u""

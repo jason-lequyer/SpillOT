@@ -31,7 +31,7 @@ import tifffile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BACKEND = ROOT / "plugins/SpillOT/SpillOT_low_memory.py"
+BACKEND = ROOT / "plugins/SpillOT/SpillOTMemory.py"
 REFERENCE = Path(__file__).with_name("_spillot_stock_reference.py")
 PUBLICATION_FAULT = Path(__file__).with_name("_spillot_publication_fault.py")
 CHANNEL_NAMES = ["CD8 target", "CD99 donor", "Unchanged marker"]
@@ -48,7 +48,7 @@ def load_backend():
     # Use an importable name so spawn workers can resolve their initializer.
     if str(BACKEND.parent) not in sys.path:
         sys.path.insert(0, str(BACKEND.parent))
-    name = "SpillOT_low_memory"
+    name = "SpillOTMemory"
     spec = importlib.util.spec_from_file_location(name, BACKEND)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -225,6 +225,29 @@ class TiledSpillOTTests(unittest.TestCase):
         self.assertEqual(fractions[-1], 1)
         self.assertTrue(all(value < 1 for value in fractions[:-1]))
         self.assertIsNone(events[0]["eta_seconds"], "ETA needs a warmup observation")
+
+    def test_routine_planning_and_inpainting_are_quiet_but_reported(self):
+        for saturation in (False, True):
+            with self.subTest(saturation=saturation):
+                stack = fixture(13, 17, saturation=saturation)
+                path, manifest = self.make_manifest(
+                    stack, saturation=saturation, name="quiet-saturation-" + str(saturation))
+                manifest["workers"] = 32
+                path.write_text(json.dumps(manifest))
+                with mock.patch.object(self.backend, "available_memory_bytes", return_value=2*1024**3), \
+                        mock.patch.object(self.backend.os, "cpu_count", return_value=32):
+                    report, stdout = self.run_backend(path, tile_size=5, batch_size=8)
+                self.assertTrue(report["completed"])
+                self.assertEqual(report["seed"], SEED)
+                self.assertEqual(report["plan"]["requested_workers"], 32)
+                self.assertEqual(report["plan"]["workers"], 1)
+                # Fiji displays all plain backend stdout in its Log window.
+                # Normal status uses the progress protocol instead.
+                self.assertTrue(stdout.strip())
+                self.assertTrue(all(line.startswith("SPILLOT_PROGRESS\t")
+                                    for line in stdout.splitlines()), stdout)
+                if saturation:
+                    self.assertEqual(report["channels"][0]["inpaint_method"], "stock_global")
 
     def test_full_input_is_never_materialized_by_asarray(self):
         stack = fixture(13, 17)

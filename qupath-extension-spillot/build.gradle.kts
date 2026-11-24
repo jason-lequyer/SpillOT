@@ -8,7 +8,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-spillot"
     group = "qupath.ext.spillot"
-    version = "0.2.2"
+    version = "0.2.3"
     description = "SpillOT: user-guided spillover removal for highly multiplexed images"
     automaticModule = "qupath.ext.spillot"
 }
@@ -31,7 +31,7 @@ tasks.test {
 // Bundle the same Python backend that the Fiji plugin and the command line use,
 // so there is a single source of truth for the algorithm.
 tasks.processResources {
-    from(listOf("../plugins/SpillOT/SpillOT.py", "../plugins/SpillOT/SpillOT_low_memory.py")) {
+    from(listOf("../plugins/SpillOT/SpillOT.py", "../plugins/SpillOT/SpillOTMemory.py")) {
         into("qupath/ext/spillot")
     }
 }

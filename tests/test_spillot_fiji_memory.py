@@ -36,9 +36,9 @@ class FijiMemoryIntegrationTests(unittest.TestCase):
                     if os.environ.get("JAVA_HOME") else shutil.which("java"))
         if not cls.java:
             raise unittest.SkipTest("Java is required for Fiji integration tests")
-        backend_path = ROOT / "plugins/SpillOT/SpillOT_low_memory.py"
+        backend_path = ROOT / "plugins/SpillOT/SpillOTMemory.py"
         sys.path.insert(0, str(backend_path.parent))
-        spec = importlib.util.spec_from_file_location("SpillOT_low_memory", backend_path)
+        spec = importlib.util.spec_from_file_location("SpillOTMemory", backend_path)
         cls.backend = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.backend
         spec.loader.exec_module(cls.backend)
@@ -145,6 +145,9 @@ class FijiMemoryIntegrationTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
             result = json.loads((Path(folder) / "bridge.json").read_text())
             self.assertTrue(result["report"]["completed"])
+            self.assertEqual(result["logs"], [], "A normal run must not open Fiji's Log window")
+            self.assertIn("memory_budget_bytes", result["report"]["plan"])
+            self.assertIn("seed", result["report"])
             self.assertEqual(Path(result["output"]), Path(folder) / "original_SpillOT.tif")
             self.assertTrue(Path(result["output"]).is_file())
             self.assertEqual(result["progress"][-1][0], 1)
@@ -152,6 +155,21 @@ class FijiMemoryIntegrationTests(unittest.TestCase):
             self.assertEqual(list(Path(folder).glob(".spillot-fiji-*")), [])
             restored = tifffile.imread(result["output"]).reshape(12, 9, 11)
             np.testing.assert_array_equal(restored[1:], self.expected("uint16")[1:])
+            self.assertEqual((Path(folder) / "original.tif").read_bytes(),
+                             b"original-file-must-not-be-overwritten")
+
+    def test_actual_backend_error_remains_visible_and_cleans_scratch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            command = [self.java, "-Djava.awt.headless=true", "-cp", self.classpath,
+                       "org.python.util.jython", str(FIXTURE), str(ROOT), folder,
+                       "float32", "false", "run-error", sys.executable]
+            run = subprocess.run(command, text=True, capture_output=True, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            result = json.loads((Path(folder) / "bridge-error.json").read_text())
+            self.assertIn("NaN or infinite intensities", result["error"])
+            self.assertTrue(any("NaN or infinite intensities" in line for line in result["logs"]))
+            self.assertFalse((Path(folder) / "original_SpillOT.tif").exists())
+            self.assertEqual(list(Path(folder).glob(".spillot-fiji-*")), [])
             self.assertEqual((Path(folder) / "original.tif").read_bytes(),
                              b"original-file-must-not-be-overwritten")
 

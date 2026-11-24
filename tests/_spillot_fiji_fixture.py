@@ -12,8 +12,8 @@ from ij.process import ByteProcessor, ShortProcessor, FloatProcessor, ColorProce
 
 repo, destination, kind, virtual = sys.argv[1:5]
 sys.path.insert(0, os.path.join(repo, "plugins", "SpillOT"))
-from SpillOT_fiji_memory import export_manifest, open_result_virtual, split_rgb_virtual
-import SpillOT_fiji_memory as bridge
+from SpillOTFiji import export_manifest, open_result_virtual, split_rgb_virtual
+import SpillOTFiji as bridge
 
 if len(sys.argv) > 5 and sys.argv[5] == "rgb":
     source_stack = ImageStack(5, 4)
@@ -133,7 +133,15 @@ scratch = os.path.join(destination, "scratch")
 os.makedirs(scratch)
 progress = []
 
-if len(sys.argv) > 5 and sys.argv[5] == "run":
+if len(sys.argv) > 5 and sys.argv[5] in ("run", "run-error"):
+    logs = []
+    original_ij = bridge.IJ
+    class CapturingIJ(object):
+        def log(self, line):
+            logs.append(unicode(line))
+        def __getattr__(self, name):
+            return getattr(original_ij, name)
+    bridge.IJ = CapturingIJ()
     class HeadlessProgress(object):
         def __init__(self, cancel_path):
             self.force_thread, self.tree_stopped, self.proc = None, True, None
@@ -144,13 +152,26 @@ if len(sys.argv) > 5 and sys.argv[5] == "run":
         def close(self):
             pass
     bridge.ProgressDialog = HeadlessProgress
-    output, report = bridge.run(
-        imp, [u"Target \u03b1", u"Donor, marker", u"Selected no donor"],
-        [1, 3, 5], [1, 3], {0: set([1]), 1: set([2]), 2: set()},
-        os.path.splitext(original)[0], os.path.join(repo, "plugins", "SpillOT"),
-        sys.argv[6], os.environ.copy(), 4, 1, False)
+    failing = sys.argv[5] == "run-error"
+    if failing:
+        # Export succeeds, then the actual Python backend diagnoses invalid data.
+        imp.getStack().getProcessor(1).setf(0, 0, float("nan"))
+    try:
+        output, report = bridge.run(
+            imp, [u"Target \u03b1", u"Donor, marker", u"Selected no donor"],
+            [1, 3, 5], [1, 3], {0: set([1]), 1: set([2]), 2: set()},
+            os.path.splitext(original)[0], os.path.join(repo, "plugins", "SpillOT"),
+            sys.argv[6], os.environ.copy(), 4, 1, False)
+    except RuntimeError as error:
+        if not failing:
+            raise
+        with open(os.path.join(destination, "bridge-error.json"), "w") as stream:
+            json.dump({"error": unicode(error), "logs": logs, "progress": progress}, stream)
+        sys.exit(0)
+    if failing:
+        raise AssertionError("The invalid-image backend run unexpectedly succeeded")
     with open(os.path.join(destination, "bridge.json"), "w") as stream:
-        json.dump({"output": output, "report": report, "progress": progress}, stream)
+        json.dump({"output": output, "report": report, "progress": progress, "logs": logs}, stream)
     sys.exit(0)
 
 
