@@ -107,41 +107,6 @@ A progress window will show elapsed time while channels are processed.
 
 ---
 
-## Memory (RAM) requirements
-
-In the **QuPath extension**, leave **Tile to save memory** checked (the default). The extension exports the selected region in small blocks, chooses a processing tile size from the available RAM, and writes the result without assembling the entire image in memory. Tiles are handled automatically; you do not need to draw individual tile annotations. The patch size remains `24`. Progress and an estimated remaining time are shown during processing. See the [QuPath instructions](qupath-extension-spillot/README.md) for details.
-
-The estimates below apply to the original Fiji/command-line backend and to QuPath with **Tile to save memory** switched off.
-
-SpillOT compares every overlapping patch in the image, so RAM use grows with both the patch size and the image area. The table shows the peak RAM in GB needed to clean one target channel with **one** suspected source channel.
-
-| Patch size | 256 x 256 px | 512 x 512 px | 1024 x 1024 px | 2048 x 2048 px |
-|---|---|---|---|---|
-| 12 | 1.3 | 5.1 | 20 | 82 |
-| 16 | 2.1 | 8.4 | 34 | 138 |
-| 20 | 3.0 | 13 | 52 | 210 |
-| 24 (default) | 4.1 | 18 | 73 | 298 |
-
-
-For other sizes, a good rule of thumb is:
-
-```text
-peak RAM in GB ≈ patch size² x megapixels / 8
-```
-
-For example, patch size 24 on a 1000 x 1000 px image needs about 24 x 24 x 1 / 8 = 72 GB. 
-
-Things that change these numbers:
-
-- **Several source channels.** Source channels for the same target are compared in parallel, one per worker process. Each additional source channel compared at the same time adds about 35%, so four source channels with four or more workers need about twice the RAM in the table.
-- **Number of worker processes.** On its own this has almost no effect on RAM (1, 4, 16 and 40 workers gave the same peak with one source channel). It only matters through the point above: with the number of workers set to `1`, source channels are compared one at a time and RAM stays at the table value however many sources are selected.
-- **Number of channels being cleaned.** Target channels are processed one after another, so cleaning more channels takes longer but does not need more RAM.
-- **Stack size.** The whole stack is held in memory about five times over as float32. This is small next to the numbers above unless the stack is very large or the patch size is very small.
-
-If you run out of memory: crop the image to the region of interest, use a smaller patch size, or set the number of worker processes to `1` (`--workers 1` on the command line) when a target has several source channels.
-
----
-
 ## Outputs
 
 SpillOT writes outputs next to the input TIFF.
