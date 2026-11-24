@@ -82,6 +82,8 @@ final class SpillOTDialog {
     private static final StringProperty PREF_ENV = PathPrefs.createPersistentPreference("spillot.envPath", "");
     private static final IntegerProperty PREF_PATCH =
             PathPrefs.createPersistentPreference("spillot.patchSize", SpillOT.DEFAULT_PATCH_SIZE);
+    private static final BooleanProperty PREF_TILE_TO_SAVE_MEMORY =
+            PathPrefs.createPersistentPreference("spillot.tileToSaveMemory", true);
 
     /** Above this many pixels the user is asked to confirm (time and memory grow with area). */
     private static final long LARGE_REGION_PIXELS = 500_000L;
@@ -119,13 +121,18 @@ final class SpillOTDialog {
     private final TextField envField = new TextField();
     private final TextField outField = new TextField();
     private final CheckBox overexposed = new CheckBox("Ignore overexposed pixels (set saturated to 0, then inpaint)");
+    private final CheckBox tileToSaveMemory = new CheckBox("Tile to save memory");
     private final ProgressBar progressBar = new ProgressBar(0);
+    private final Label progressLabel = new Label("Ready");
     private final TextArea logArea = new TextArea();
     private final Button runButton = new Button("Run");
     private final Button cancelButton = new Button("Cancel run");
     private final Button closeButton = new Button("Close");
     private SplitPane center;
     private GridPane settings;
+    private double lastProgress;
+    private long runStarted;
+    private boolean progressActive;
 
     static void show(QuPathGUI qupath) {
         if (openStage != null && openStage.isShowing()) {
@@ -261,7 +268,16 @@ final class SpillOTDialog {
         patchSpinner.getValueFactory().setValue(PREF_PATCH.get() >= 4 ? PREF_PATCH.get() : SpillOT.DEFAULT_PATCH_SIZE);
         patchSpinner.setTooltip(new Tooltip("Even integer >= 4. Lower = more aggressive removal and faster runs."));
         workerSpinner.setEditable(true);
-        workerSpinner.setTooltip(new Tooltip("Reduce this if you run out of memory."));
+        workerSpinner.setTooltip(new Tooltip("Maximum worker processes. With 'Tile to save memory' enabled, "
+                + "the backend limits this further to fit available RAM. Reduce it for other applications to have more memory."));
+        tileToSaveMemory.setSelected(PREF_TILE_TO_SAVE_MEMORY.get());
+        tileToSaveMemory.setTooltip(new Tooltip("Process the chosen region automatically in serial tiles using "
+                + "a RAM budget chosen from available memory. No annotations or manual tiles are needed. "
+                + "This reduces peak memory, but may not reduce running time. Turn off to use the original full-stack workflow."));
+        tileToSaveMemory.selectedProperty().addListener((v, oldValue, newValue) -> {
+            PREF_TILE_TO_SAVE_MEMORY.set(newValue);
+            updateRegionInfo();
+        });
         String env = PREF_ENV.get();
         if (env == null || env.isBlank() || SpillOT.pythonFromEnv(env) == null
                 || !SpillOT.pythonFromEnv(env).toFile().exists())
@@ -280,12 +296,13 @@ final class SpillOTDialog {
         settings.setPadding(new Insets(6, 10, 6, 10));
         settings.addRow(0, new Label("Patch size:"), patchSpinner, new Label("Worker processes:"), workerSpinner);
         settings.add(overexposed, 4, 0, 2, 1);
-        settings.add(new Label("Conda env path:"), 0, 1);
-        settings.add(envField, 1, 1, 4, 1);
-        settings.add(browseEnv, 5, 1);
-        settings.add(new Label("Output folder:"), 0, 2);
-        settings.add(outField, 1, 2, 4, 1);
-        settings.add(browseOut, 5, 2);
+        settings.add(tileToSaveMemory, 0, 1, 6, 1);
+        settings.add(new Label("Conda env path:"), 0, 2);
+        settings.add(envField, 1, 2, 4, 1);
+        settings.add(browseEnv, 5, 2);
+        settings.add(new Label("Output folder:"), 0, 3);
+        settings.add(outField, 1, 3, 4, 1);
+        settings.add(browseOut, 5, 3);
         GridPane.setHgrow(envField, Priority.ALWAYS);
         GridPane.setHgrow(outField, Priority.ALWAYS);
 
@@ -303,7 +320,8 @@ final class SpillOTDialog {
         HBox buttons = new HBox(8, progressBar, runButton, cancelButton, closeButton);
         buttons.setAlignment(Pos.CENTER_RIGHT);
         buttons.setPadding(new Insets(6, 10, 10, 10));
-        VBox logBox = new VBox(logArea);
+        progressLabel.setWrapText(true);
+        VBox logBox = new VBox(4, progressLabel, logArea);
         logBox.setPadding(new Insets(0, 10, 0, 10));
         VBox bottom = new VBox(settings, logBox, buttons);
 
@@ -482,11 +500,16 @@ final class SpillOTDialog {
         ImageRegion r = region();
         long pixels = (long) r.getWidth() * r.getHeight();
         String txt = r.getWidth() + " x " + r.getHeight() + " px";
-        if (selectedRegion == null)
+        if (selectedRegion == null && !tileToSaveMemory.isSelected())
             txt += "   (select an annotation before opening SpillOT to process just that area)";
         if (pixels > LARGE_REGION_PIXELS) {
-            txt += "   Large region: expect a long run and high memory use.";
-            regionInfo.setStyle("-fx-text-fill: #c0392b;");
+            if (tileToSaveMemory.isSelected()) {
+                txt += "   Automatic tiles limit memory; a large region can still take a long time.";
+                regionInfo.setStyle("");
+            } else {
+                txt += "   Large region: expect a long run and high memory use.";
+                regionInfo.setStyle("-fx-text-fill: #c0392b;");
+            }
         } else {
             regionInfo.setStyle("");
         }
@@ -599,7 +622,7 @@ final class SpillOTDialog {
 
         ImageRegion r = region();
         long pixels = (long) r.getWidth() * r.getHeight();
-        if (pixels > LARGE_REGION_PIXELS && !Dialogs.showConfirmDialog("SpillOT",
+        if (pixels > LARGE_REGION_PIXELS && !tileToSaveMemory.isSelected() && !Dialogs.showConfirmDialog("SpillOT",
                 "The region is " + r.getWidth() + " x " + r.getHeight() + " px.\n\n"
                 + "SpillOT compares every overlapping patch, so run time and memory grow with the area "
                 + "(as a guide, 200 x 200 px takes about a minute per channel at patch size 24).\n"
@@ -610,6 +633,7 @@ final class SpillOTDialog {
 
         p.patchSize = patch;
         p.workers = workers;
+        p.tileToSaveMemory = tileToSaveMemory.isSelected();
         p.envPath = env;
         p.ignoreOverexposed = overexposed.isSelected();
         p.outputDir = outputDir();
@@ -622,18 +646,25 @@ final class SpillOTDialog {
         if (skipped.length() > 0)
             log("Skipping (no source channels selected): " + skipped);
         cancelRequested.set(false);
-        final int total = p.sources.size();
-        progressBar.setProgress(total == 1 ? ProgressBar.INDETERMINATE_PROGRESS : 0);
+        lastProgress = 0;
+        progressActive = true;
+        runStarted = System.nanoTime();
+        progressBar.setProgress(0);
+        progressLabel.setText("Starting; estimating remaining time");
+        if (p.tileToSaveMemory && pixels > LARGE_REGION_PIXELS)
+            log("Large region: automatic tiles limit memory, but total processing time still grows with image area.");
         setRunning(true);
 
         Thread thread = new Thread(() -> {
             try {
                 SpillOT.Result result = SpillOT.run(server, p,
                         line -> Platform.runLater(() -> log(line)),
-                        done -> Platform.runLater(() -> progressBar.setProgress(done / (double) total)),
-                        cancelRequested::get);
+                        null, cancelRequested::get,
+                        update -> Platform.runLater(() -> updateProgress(update)));
                 Platform.runLater(() -> {
+                    progressActive = false;
                     progressBar.setProgress(1);
+                    progressLabel.setText("Finished in " + formatDuration((System.nanoTime() - runStarted) / 1_000_000_000.0));
                     setRunning(false);
                     try {
                         showResult(result, p.baseName);
@@ -644,13 +675,17 @@ final class SpillOTDialog {
                 });
             } catch (InterruptedException e) {
                 Platform.runLater(() -> {
+                    progressActive = false;
                     progressBar.setProgress(0);
+                    progressLabel.setText("Cancelled");
                     setRunning(false);
                     log("Cancelled.");
                 });
             } catch (Throwable e) {
                 Platform.runLater(() -> {
+                    progressActive = false;
                     progressBar.setProgress(0);
+                    progressLabel.setText("Stopped: " + e.getMessage());
                     setRunning(false);
                     log("ERROR: " + e.getMessage());
                     Dialogs.showErrorMessage("SpillOT", String.valueOf(e.getMessage()));
@@ -659,6 +694,33 @@ final class SpillOTDialog {
         }, "spillot-run");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    private void updateProgress(SpillOT.Progress update) {
+        if (!progressActive)
+            return;
+        lastProgress = Math.max(lastProgress, update.fraction);
+        progressBar.setProgress(lastProgress);
+        String message = update.message.isBlank() ? update.phase : update.message;
+        if (lastProgress >= 1) {
+            progressLabel.setText("Finished");
+            return;
+        }
+        String eta = update.etaSeconds == null ? "estimating remaining time"
+                : "about " + formatDuration(update.etaSeconds) + " remaining"
+                        + ("export".equals(update.phase) ? " for export" : "");
+        progressLabel.setText((int) Math.floor(lastProgress * 100) + "% — " + message + " · " + eta);
+    }
+
+    static String formatDuration(double seconds) {
+        long value = Math.max(0, (long) Math.ceil(seconds));
+        if (value < 60)
+            return value + " s";
+        if (value < 3600)
+            return ((value + 59) / 60) + " min";
+        if (value < 86400)
+            return (value / 3600) + " h " + ((value % 3600) / 60) + " min";
+        return (value / 86400) + " d " + ((value % 86400) / 3600) + " h";
     }
 
     private static Integer commit(Spinner<Integer> spinner) {

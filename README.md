@@ -109,6 +109,10 @@ A progress window will show elapsed time while channels are processed.
 
 ## Memory (RAM) requirements
 
+In the **QuPath extension**, leave **Tile to save memory** checked (the default). The extension exports the selected region in small blocks, chooses a processing tile size from the available RAM, and writes the result without assembling the entire image in memory. Tiles are handled automatically; you do not need to draw individual tile annotations. The patch size remains `24`. Progress and an estimated remaining time are shown during processing. See the [QuPath instructions](qupath-extension-spillot/README.md) for details.
+
+The estimates below apply to the original Fiji/command-line backend and to QuPath with **Tile to save memory** switched off.
+
 SpillOT compares every overlapping patch in the image, so RAM use grows with both the patch size and the image area. The table shows the peak RAM in GB needed to clean one target channel with **one** suspected source channel.
 
 | Patch size | 256 x 256 px | 512 x 512 px | 1024 x 1024 px | 2048 x 2048 px |
@@ -303,12 +307,13 @@ Make sure the channel order matches the row/column order of any CSV matrix you u
 
 # QuPath extension
 
-SpillOT is also available as a QuPath extension (QuPath 0.7.0 or later). It has the same workflow as the Fiji plugin and calls the same Python backend, so it needs the same `spillot` conda environment.
+SpillOT is also available as a QuPath extension (QuPath 0.7.0 or later). It uses the same SpillOT patch comparison algorithm and the same `spillot` conda environment as the Fiji plugin.
 
 1. Create the `spillot` conda environment as described in the [Fiji quick start](#quick-start).
-2. Drag `qupath-extension-spillot-<version>.jar` onto the QuPath window and restart QuPath.
+2. Download [qupath-extension-spillot-0.2.0.jar](qupath-extension-spillot-0.2.0.jar), drag it onto the QuPath window, and restart QuPath. Remove an older SpillOT extension jar before installing the update.
 3. Open a multiplexed image. For whole-slide images, draw and select an annotation around the area to clean.
 4. Run **Extensions → SpillOT → Run SpillOT...**
+5. Leave **Tile to save memory** checked to divide the selected region into automatic processing tiles. Tile size adapts to available RAM; patch size stays at `24` unless you change it. The window shows progress and an ETA after processing has warmed up. The result keeps the full selected region and its channels.
 
 See [qupath-extension-spillot/README.md](qupath-extension-spillot/README.md) for details, scripting, and build instructions.
 

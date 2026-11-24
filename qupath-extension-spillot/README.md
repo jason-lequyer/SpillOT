@@ -1,8 +1,9 @@
 # SpillOT for QuPath
 
 A QuPath extension that runs SpillOT spillover removal on the image open in QuPath.
-It has the same workflow as the Fiji plugin and calls the same Python backend
-(`plugins/SpillOT/SpillOT.py`), so results match the Fiji plugin and the command line.
+It has the same workflow as the Fiji plugin and reuses its patch solver and
+comparison algorithm. The optional memory-saving runner processes tiles and
+patch batches without holding all overlapping patches in RAM.
 
 Requires **QuPath 0.7.0 or later**.
 
@@ -16,31 +17,75 @@ Requires **QuPath 0.7.0 or later**.
    conda create -n spillot -c conda-forge python=3.11 numpy scipy tifffile imagecodecs
    ```
 
-2. Drag `qupath-extension-spillot-<version>.jar` onto the QuPath window and restart QuPath.
-   The Python backend is inside the jar; nothing else needs to be copied.
+2. Download [qupath-extension-spillot-0.2.0.jar](../qupath-extension-spillot-0.2.0.jar),
+   remove any older SpillOT extension jar, then drag the new jar onto the QuPath
+   window and restart QuPath. Both Python runners are inside the jar; nothing
+   else needs to be copied.
 
 ## Use
 
 1. Open a multiplexed image (IMC, CODEX, Opal/Vectra, ...).
    For a whole-slide image, **draw and select an annotation** around the area you want to clean
-   first. SpillOT compares every overlapping patch, so run time and memory grow with the area
-   (roughly a minute per channel for 200 x 200 px at the default patch size).
+   first. The selected object's bounding box is used. You can also choose the whole image.
 2. **Extensions → SpillOT → Run SpillOT...**
 3. On the left, tick the channels you want to clean. For each one, click the channels on the right
    that you suspect are bleeding into it. Signal is removed only where local structure matches.
 4. Set the patch size (even, >= 4; default 24, smaller is faster and more aggressive), the number
    of worker processes, and the path to the `spillot` conda environment (prefilled when found).
-5. Click **Run**. Progress from the backend is shown in the window.
+5. Leave **Tile to save memory** checked (the default). The extension automatically
+   exports and processes the region in bounded tiles, using the available RAM to
+   choose its working size. You do not need to draw tiles or split the original image.
+6. Click **Run**. The window shows the current stage, progress and an estimated
+   remaining time once enough work has completed to measure the processing rate.
+   The estimate updates as the run proceeds; saving the result is a separate stage.
 
 When the run finishes the cleaned image is added to the open project (or offered for opening in
 the viewer if there is no project) with the original channel names and colours.
+
+## Tile to save memory
+
+Tile size and patch size are different settings. **Patch size stays at 24** unless
+you change it. Each tile includes the context needed by patches that cross its
+boundary, and results are written back to their original positions. Global channel
+offsets and intensity ranges are shared across tiles. All channels and the full
+selected region are retained in the output, including channels you did not clean.
+
+Tiles are processed in sequence. The backend limits its patch batches and worker
+count to fit the estimated RAM budget, so the requested worker count is an upper
+limit in this mode. The chosen settings are recorded in the run log. Memory
+estimates leave headroom for QuPath and the operating system, but other applications
+can still change how much memory is available during a run.
+
+Temporary files are stored on disk, and the extension checks free disk space before
+exporting. Large slides therefore need substantial free disk space even when RAM
+use is bounded. Successful outputs are published after processing and saving have
+finished; cancellation removes the run's temporary files.
+
+Tiling saves memory; it does not eliminate the work of comparing every overlapping
+patch. Large regions can still take hours and whole slides can take much longer,
+especially when many target channels are selected. Use the ETA from your own data
+to judge the expected run time. Initial estimates can change as different tissue
+regions or target channels are processed.
+
+The patch solver uses random assignments. The tiled runner uses a seed tied to each
+global patch coordinate so tile scheduling does not introduce new random choices
+at boundaries. It does not reproduce an arbitrary previous unseeded run exactly.
+Small regression fixtures compare tiled output against the original backend with
+matched seeds, including tile edges and corners.
+
+**Ignore overexposed pixels** remains available. Saturated pixels are handled using
+global neighboring signal, rather than a fixed tile halo. If the full nearest-neighbor
+index would exceed the memory budget, a bounded search is used and logged. Equally
+distant neighbors may be selected differently in that fallback.
+
+Switch **Tile to save memory** off to use the original whole-region backend.
 
 ## Outputs
 
 Written to the output folder (default: a `SpillOT` folder in the project or next to the image):
 
 ```text
-<name>.tif                        exported region, one slice per channel
+<name>.tif                        exported region, one plane per channel
 <name>.csv                        spillover matrix (row = target, column = source, 1 = remove)
 <name>_Channel_<N>_SpillOT.tif    each cleaned channel
 <name>_SpillOT.tif                full stack with the cleaned channels replaced
@@ -49,6 +94,9 @@ Written to the output folder (default: a `SpillOT` folder in the project or next
 These are the same files and CSV convention as the Fiji plugin, so the exported `.tif` + `.csv`
 pair can also be sent to a cluster and run with `plugins/SpillOT/SpillOT.py`.
 If a `.csv` from an earlier run on the same region exists, the dialog is prefilled from it.
+In memory-saving mode, TIFF output includes channel names and pixel calibration;
+large files use BigTIFF. A cropped region is still a new image with its own local
+pixel coordinates; the source origin is retained in the output metadata.
 
 ## Notes
 
@@ -57,6 +105,9 @@ If a `.csv` from an earlier run on the same region exists, the dialog is prefill
   markers `Ch1`, `Ch2`, ...; the result is saved as a proper multichannel image.
 - For images with real z-slices or timepoints, the plane shown in the viewer is processed.
 - RGB (brightfield) images are not supported.
+- Memory-saving mode supports unsigned 8-bit, unsigned 16-bit and 32-bit float
+  images. Other source pixel types are rejected before export to avoid silently
+  losing precision.
 - The backend is CPU-only.
 
 ## Scripting
@@ -68,6 +119,8 @@ def p = new SpillOT.Params()
 p.envPath   = "/home/me/miniconda3/envs/spillot"
 p.outputDir = java.nio.file.Paths.get("/data/spillot_out")
 p.baseName  = "my_region"
+p.tileToSaveMemory = true          // default: automatic tiles and bounded memory
+// p.memoryBudgetMB = 1024         // optional backend budget; 0 = automatic
 p.sources.put(20, [25, 27] as Set)   // 0-based: remove channels 26 and 28 from channel 21
 // p.region = qupath.lib.regions.ImageRegion.createInstance(x, y, width, height, 0, 0)
 def result = SpillOT.run(getCurrentServer(), p, { println it }, null, { false })
@@ -82,5 +135,22 @@ Needs a JDK 25 (the version QuPath 0.7 uses). From this folder:
 ./gradlew build
 ```
 
-The jar is written to `build/libs/`. The build copies `../plugins/SpillOT/SpillOT.py` into the jar,
-so this folder must stay inside the SpillOT repository.
+The jar is written to `build/libs/`. The build bundles `SpillOT.py` and
+`SpillOT_low_memory.py` from `../plugins/SpillOT/`, so this folder must stay inside
+the SpillOT repository.
+
+## Tests
+
+From the repository root, run the Python regression suite with an environment
+containing NumPy, SciPy and tifffile:
+
+```bash
+python -m unittest discover -s tests -p 'test_spillot_low_memory.py'
+```
+
+From this folder, run `./gradlew test`. Set `SPILLOT_TEST_ENV` to the root of a
+compatible conda environment to include the Java-to-Python integration tests:
+
+```bash
+SPILLOT_TEST_ENV=/path/to/envs/spillot ./gradlew test
+```
